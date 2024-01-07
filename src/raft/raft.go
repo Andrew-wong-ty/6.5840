@@ -30,7 +30,7 @@ import (
 )
 
 // tester limits you tens of heartbeats per second
-const HEARTBEATTIMEOUT time.Duration = 80 * time.Millisecond
+const HEARTBEATTIMEOUT time.Duration = 30 * time.Millisecond
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -44,7 +44,7 @@ const HEARTBEATTIMEOUT time.Duration = 80 * time.Millisecond
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
-	CommandIndex int
+	CommandIndex int // the index of log
 
 	// For 2D:
 	SnapshotValid bool
@@ -149,6 +149,8 @@ func (rf *Raft) changeStateAndReinitialize(role Role) {
 			// immediately trigger a heartbeat
 			rf.heartbeatTimeoutTicker.Reset(HEARTBEATTIMEOUT)
 			go rf.sendAppendEntriesToAllPeers()
+			// 3A: immediately commit a no-op log after being a leader?
+			go rf.Start("NOOP")
 			break
 		case FOLLOWER:
 			rf.state = FOLLOWER
@@ -174,8 +176,15 @@ func (rf *Raft) resetElectionTicker() time.Duration {
 //	@return string
 func (rf *Raft) logs2str(logs []Log) string {
 	res := ""
+	l := len(logs)
 	for idx, logItem := range logs {
-		res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ", rf.physicalIdx2logIdx(idx), logItem.Term, convertCommandToString(logItem.Command))
+		if idx == 0 {
+			res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ...", idx, logItem.Term, convertCommandToString(logItem.Command))
+		}
+		if idx >= l-1-5 {
+			res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ", idx, logItem.Term, convertCommandToString(logItem.Command))
+
+		}
 	}
 	return "[" + res + "]"
 }
@@ -339,7 +348,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
 	defer rf.persist() //persisted before the server replies to an ongoing RPC.
-	defer DebugLog(dVote, rf, "my role=%v, handled reqVote from %v grant= %v", string(rf.state), args.CandidateId, reply.VoteGranted)
 
 	reply.Term = max(rf.currentTerm, args.Term)
 	reply.VoteGranted = false
@@ -347,12 +355,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// RequestVote RPC->Receiver implementation->1: Reply false if term < currentTerm (§5.1)
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
+		DebugLog(dVote, rf, "my role=%v, handled reqVote from %v grant= %v", string(rf.state), args.CandidateId, reply.VoteGranted)
 		return
 	}
 
 	// Rules for Servers->All Servers->2: If RPC request or response contains term T > currentTerm: set currentTerm = T,
 	// convert to follower (§5.1)
 	if args.Term > rf.currentTerm {
+		DebugLog(dVote, rf, "my role=%v, his(S%v) term is bigger, => votedFor = nil ", args.CandidateId)
 		rf.currentTerm = args.Term
 		rf.votedFor = nil
 		rf.changeStateAndReinitialize(FOLLOWER)
@@ -363,7 +373,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	voteAvailable := rf.votedFor == nil || *(rf.votedFor) == args.CandidateId
 	atLeastUpToDate := args.LastLogTerm > rf.getLastLogTerm() ||
 		args.LastLogTerm == rf.getLastLogTerm() && args.LastLogIndex >= rf.getLastLogIndex()
+	DebugLog(dVote, rf, "his{LastLogTerm=%v LastLogIndex=%v}, my{LastLogTerm=%v LastLogIndex=%v}", args.LastLogTerm, args.LastLogIndex, rf.getLastLogTerm(), rf.getLastLogIndex())
+	DebugLog(dVote, rf, "voteAvailable=%v, atLeastUpToDate=%v", voteAvailable, atLeastUpToDate)
 	if voteAvailable && atLeastUpToDate {
+		DebugLog(dVote, rf, "Voted to S%v", args.CandidateId)
 		reply.VoteGranted = true
 		rf.votedFor = &args.CandidateId
 	}
@@ -371,6 +384,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if reply.VoteGranted {
 		rf.resetElectionTicker()
 	}
+	DebugLog(dVote, rf, "my role=%v, handled reqVote from %v grant= %v", string(rf.state), args.CandidateId, reply.VoteGranted)
 
 }
 
@@ -441,7 +455,7 @@ func (rf *Raft) electMyselfToBeLeader() {
 							voteCount++
 						}
 					}
-					DebugLog(dVote, rf, "eid=%v vote=%v/%v", eventId, voteCount, len(rf.peers))
+					DebugLog(dVote, rf, "eid=%v receive vote from%v, curr vote=%v/%v", eventId, peerId, voteCount, len(rf.peers))
 
 					if float64(voteCount)/float64(len(rf.peers)) > 0.5 {
 						DebugLog(dVote, rf, "eid=%v, it is a leader now! tick heartbeat! ", eventId)
@@ -705,9 +719,9 @@ func (rf *Raft) applyCommittedLogs() {
 			Command:      rf.logs[rf.logIdx2physicalIdx(index)].Command,
 			CommandIndex: index,
 		}
+		rf.lastApplied++
 		DebugLog(dCommit, rf, "committed {Idx=%v, T=%v, Cmd=%v}, lastApp=%v, cmitIdx=%v",
 			index, rf.logs[rf.logIdx2physicalIdx(index)].Term, rf.logs[rf.logIdx2physicalIdx(index)].Command, rf.lastApplied, rf.commitIndex)
-		rf.lastApplied++
 		rf.mutex.Unlock()
 		rf.applyChan <- msg // To prevent possible deadlock, put this outside the lock context
 	}

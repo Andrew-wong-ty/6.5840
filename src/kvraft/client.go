@@ -1,13 +1,19 @@
 package kvraft
 
-import "6.5840/labrpc"
+import (
+	"6.5840/labrpc"
+	"sync"
+)
 import "crypto/rand"
 import "math/big"
-
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	clientId  int64
+	serialNum int // the sequence number of next command
+	leaderId  int
+	mutex     sync.Mutex
 }
 
 func nrand() int64 {
@@ -20,7 +26,10 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.serialNum = 1
+	ck.leaderId = 0
+	ck.mutex = sync.Mutex{}
 	return ck
 }
 
@@ -35,9 +44,13 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
-	return ""
+	return ck.doCommand(CommandRequest{
+		Key:       key,
+		Value:     "",
+		OpType:    GET,
+		SerialNum: ck.serialNum,
+		ClientId:  ck.clientId,
+	})
 }
 
 // shared by Put and Append.
@@ -50,11 +63,44 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.doCommand(CommandRequest{
+		Key:       key,
+		Value:     value,
+		OpType:    op,
+		SerialNum: ck.serialNum,
+		ClientId:  ck.clientId,
+	})
+}
+
+func (ck *Clerk) doCommand(req CommandRequest) string {
+
+	DebugLog(dClient, "Client Initial: ClientID=%v OP=%v k=%v v=%v", req.ClientId, req.OpType, req.Key, req.Value)
+
+	ck.mutex.Lock()
+	leader := ck.leaderId
+	ck.mutex.Unlock()
+	for {
+		rsp := CommandResponse{}
+		req.TransId = nrand()
+		DebugLog(dClient, "Client Called: leaderId=%v, transId=%v", leader, req.TransId)
+		ok := ck.servers[leader].Call("KVServer.CommandHandler", &req, &rsp)
+		if ok {
+			if rsp.Err == OK || rsp.Err == ErrNoKey {
+				DebugLog(dClient, "Client Done: leaderId=%v/%v, transId=%v OP=%v k=%v v=%v", leader, rsp.LeaderId, req.TransId, req.OpType, req.Key, req.Value)
+				ck.mutex.Lock()
+				ck.leaderId = leader
+				ck.serialNum++
+				ck.mutex.Unlock()
+				return rsp.Value
+			}
+		}
+		leader = (leader + 1) % len(ck.servers)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, PUT)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, APPEND)
 }
