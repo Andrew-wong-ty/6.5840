@@ -1,4 +1,4 @@
-package raft
+package kvraft
 
 import (
 	"fmt"
@@ -54,14 +54,12 @@ func init() {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 }
 
-func DebugLog(topic logTopic, rf *Raft, format string, a ...interface{}) {
+func DebugLog(topic logTopic, format string, a ...interface{}) {
 	if debugVerbosity >= 1 {
 		time := time.Since(debugStart).Microseconds()
 		time /= 100
 		prefix := fmt.Sprintf("%06d %v ", time, string(topic))
-		S := fmt.Sprintf("S%d ", rf.me)
-		T := fmt.Sprintf("T%d ", rf.currentTerm)
-		format = prefix + S + T + format
+		format = prefix + format
 		log.Printf(format, a...)
 	}
 }
