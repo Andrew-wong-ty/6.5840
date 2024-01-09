@@ -45,17 +45,9 @@ func generateEventId(rf *Raft) string {
 
 func convertCommandToString(Command interface{}) string {
 	commandStr := fmt.Sprintf("%v", Command)
-	if len(commandStr) > 10 {
-		convertedCommand := fmt.Sprintf("%s...%s", commandStr[:5], commandStr[len(commandStr)-5:])
-		return convertedCommand
-	}
+	//if len(commandStr) > 10 {
+	//	convertedCommand := fmt.Sprintf("%s...%s", commandStr[:5], commandStr[len(commandStr)-5:])
+	//	return convertedCommand
+	//}
 	return fmt.Sprint(commandStr)
-}
-
-func logs2str(logs []Log) string {
-	res := ""
-	for idx, logItem := range logs {
-		res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ", idx, logItem.Term, convertCommandToString(logItem.Command))
-	}
-	return "[" + res + "]"
 }

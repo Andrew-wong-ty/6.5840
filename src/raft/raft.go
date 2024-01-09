@@ -178,6 +178,7 @@ func (rf *Raft) logs2str(logs []Log) string {
 	res := ""
 	l := len(logs)
 	for idx, logItem := range logs {
+		//res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ", rf.physicalIdx2logIdx(idx), logItem.Term, convertCommandToString(logItem.Command))
 		if idx == 0 {
 			res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ...", idx, logItem.Term, convertCommandToString(logItem.Command))
 		}
@@ -483,6 +484,11 @@ type AppendEntriesArgs struct {
 	EventId      string // *only for debug* : An Id represents the event of leader sending AppendEntries to all peers
 }
 
+func (aa AppendEntriesArgs) toString() string {
+	res := fmt.Sprintf("[Term:%v LeaderId:%v PrevLogIndex:%v PrevLogTerm:%v, LeaderCommit:%v, EventId:%v, ]", aa.Term, aa.LeaderId, aa.PrevLogIndex, aa.PrevLogTerm, aa.LeaderCommit, aa.EventId)
+	return res
+}
+
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
@@ -562,16 +568,31 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	// 2. Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
-	if !(rf.getLastLogIndex() >= args.PrevLogIndex && /*contains contain an entry at prevLogIndex*/
-		rf.logs[rf.logIdx2physicalIdx(args.PrevLogIndex)].Term == args.PrevLogTerm /*entry's index matches prevLogTerm*/) {
+	// corner case: args.PrevLogIndex==rf.snapshotLastIncludedIndex
+	if !(rf.getLastLogIndex() >= args.PrevLogIndex) {
 		reply.Success = false
-		DebugLog(dClient, rf, "eid=%v, leaderId=%v, log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm. logs=%v", args.EventId, args.LeaderId, rf.logs2str(rf.logs))
+		DebugLog(dClient, rf, "eid=%v, leaderId=%v, !(rf.getLastLogIndex() >= args.PrevLogIndex). logs=%v", args.EventId, args.LeaderId, rf.logs2str(rf.logs))
 		return
 	}
+	var myLogTermAtLeaderPrevLogIndex int
+	if rf.logIdx2physicalIdx(args.PrevLogIndex) <= 0 {
+		myLogTermAtLeaderPrevLogIndex = max(0, rf.snapshotLastIncludedTerm)
+	} else {
+		myLogTermAtLeaderPrevLogIndex = rf.logs[rf.logIdx2physicalIdx(args.PrevLogIndex)].Term
+	}
+	if !(myLogTermAtLeaderPrevLogIndex == args.PrevLogTerm) {
+		reply.Success = false
+		DebugLog(dClient, rf, "eid=%v, leaderId=%v, !(myLogTermAtLeaderPrevLogIndex == args.PrevLogTerm). logs=%v", args.EventId, args.LeaderId, rf.logs2str(rf.logs))
+		return
+	}
+
 	// 4. Append any new entries not already in the log
 	for i, newLog := range args.Entries {
 		newIndex := args.PrevLogIndex + i + 1 // the index of this new log
 		newTerm := newLog.Term
+		if rf.logIdx2physicalIdx(newIndex) <= 0 {
+			continue // skip new logs that are already in the snapshot
+		}
 		// 3. check if an existing entry conflicts with a new one (same index but different terms)
 		if rf.getLastLogIndex() >= newIndex && rf.logs[rf.logIdx2physicalIdx(newIndex)].Term != newTerm {
 			// delete the existing entry and all that follow it
@@ -759,15 +780,22 @@ func (rf *Raft) sendAppendEntriesToAllPeers() {
 				go rf.sendInstallSnapshotToOnePeer(followerId, args)
 			} else if leaderLastLogIdx >= nextIdx { // need to send new logs (rf.logs[nextIdx:]) to followers
 				DebugLog(dLeader, rf, "sent AppendEntries to %v, eid=%v,  cmitIdx=%v, appliedIdx=%v, lastLogIdx=%v, ( firstLogIdx=%v, splastIcIdx=%v, splastIcT=%v ), nextIndex[%v]=%v, currLogs= %v", followerId, eid, rf.commitIndex, rf.lastApplied, leaderLastLogIdx, rf.firstLogIdx, rf.snapshotLastIncludedIdx, rf.snapshotLastIncludedTerm, followerId, nextIdx, rf.logs2str(rf.logs))
+				var preLogTerm int
+				if rf.logIdx2physicalIdx(nextIdx-1) <= 0 {
+					preLogTerm = max(0, rf.snapshotLastIncludedTerm /*-1 when it is first initialized*/)
+				} else {
+					preLogTerm = rf.logs[rf.logIdx2physicalIdx(nextIdx-1)].Term
+				}
 				args := AppendEntriesArgs{
 					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
-					PrevLogIndex: nextIdx - 1,                                    // index of log entry immediately preceding new ones
-					PrevLogTerm:  rf.logs[rf.logIdx2physicalIdx(nextIdx-1)].Term, // term of PrevLogIndex Log
+					PrevLogIndex: nextIdx - 1, // index of log entry immediately preceding new ones
+					PrevLogTerm:  preLogTerm,  //rf.logs[rf.logIdx2physicalIdx(nextIdx-1)].Term, // term of PrevLogIndex Log // todo nextIdx=19, firstLogIdx=20
 					Entries:      rf.logs[rf.logIdx2physicalIdx(nextIdx):],
 					LeaderCommit: rf.commitIndex,
 					EventId:      eid, // only for debug
 				}
+				DebugLog(dLeader, rf, "+ args=%v", args.toString())
 				go rf.sendAppendEntriesToOnePeer(followerId, nextIdx, args, eid)
 			} else { // no new logs are needed; send empty logs entries as heartbeat
 				args := AppendEntriesArgs{

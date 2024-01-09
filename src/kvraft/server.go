@@ -4,13 +4,14 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const CmdTimeout = 200 * time.Millisecond
+const CmdTimeout = 250 * time.Millisecond
 
 type Op struct {
 	// Your definitions here.
@@ -35,8 +36,8 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	maxraftstate int // snapshot if log grows this big
-
+	maxraftstate       int // snapshot if log grows this big
+	persister          *raft.Persister
 	lastApplied        int
 	inMemoryDB         map[string]string // in-memory kv map
 	clientId2SerialNum map[int64]int     // the latest sequence number of each client
@@ -53,13 +54,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 // getResponseChan
 //
-//	@Description:
+//	@Description: get the chan used to send
 //	@receiver kv
 //	@param clientId
 //	@return chan
 func (kv *KVServer) getResponseChan(commandIdx int) chan Op {
 	if _, hasKey := kv.logIdx2chan[commandIdx]; !hasKey {
-		kv.logIdx2chan[commandIdx] = make(chan Op, 1) // buf size need to be 1 in case new leader to commit previous logs
+		kv.logIdx2chan[commandIdx] = make(chan Op, 1) // buf size need to be 1 in case no chan receiver when new leader commits previous logs
 	}
 	return kv.logIdx2chan[commandIdx]
 }
@@ -105,7 +106,7 @@ func (kv *KVServer) CommandHandler(req *CommandRequest, rsp *CommandResponse) {
 	select {
 	case msg := <-responseChan:
 		DebugLog(dClient, "S%v (KV); ResponseChan notified", kv.me)
-		if msg.SerialNum == req.SerialNum && msg.ClientId == req.ClientId /*todo why?*/ {
+		if msg.SerialNum == req.SerialNum && msg.ClientId == req.ClientId /*todo necessary?*/ {
 			if req.OpType == GET {
 				kv.mu.Lock()
 				val, ok := kv.inMemoryDB[req.Key]
@@ -142,7 +143,7 @@ func (kv *KVServer) dbToString() string {
 }
 
 func (kv *KVServer) applier() {
-	for {
+	for kv.killed() == false {
 		select {
 		case msg := <-kv.applyCh:
 			noop, isNoop := msg.Command.(string)
@@ -154,12 +155,13 @@ func (kv *KVServer) applier() {
 				op := msg.Command.(Op)
 				DebugLog(dClient, "S%v (KV); applier notified, msg={cmdIdx=%v, cmdOk=%v, op=}", kv.me, msg.CommandIndex, msg.CommandValid, op.toString())
 				kv.mu.Lock()
+				// check lastApplied index
 				if msg.CommandIndex <= kv.lastApplied {
 					kv.mu.Unlock()
 					continue
 				}
 				kv.lastApplied = msg.CommandIndex
-				responseChan := kv.getResponseChan(msg.CommandIndex)
+				// check serial number is increasing and execute PutAppend
 				if op.SerialNum > kv.clientId2SerialNum[op.ClientId] {
 					if op.OpType == PUT {
 						DebugLog(dClient, "S%v (KV); put[%v]=%v", kv.me, op.Key, op.Value)
@@ -172,12 +174,60 @@ func (kv *KVServer) applier() {
 					kv.clientId2SerialNum[op.ClientId] = op.SerialNum
 				}
 				DebugLog(dClient, "S%v (KV); currDB=%v", kv.me, kv.dbToString())
-				kv.mu.Unlock()
+
+				//  notify kvserver who is waiting for result
+				responseChan := kv.getResponseChan(msg.CommandIndex)
 				responseChan <- op
+
+				// check if snapshot is applicable
+				if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
+					kv.rf.Snapshot(msg.CommandIndex, kv.encodeSnapshot())
+				}
+				kv.mu.Unlock()
+			}
+
+			if msg.SnapshotValid {
+				kv.mu.Lock()
+				clt2SerialNum, db := kv.decodeSnapshot(msg.Snapshot)
+				if msg.SnapshotIndex >= kv.lastApplied {
+					kv.lastApplied = msg.SnapshotIndex
+					kv.clientId2SerialNum = clt2SerialNum
+					kv.inMemoryDB = db
+				}
+				kv.mu.Unlock()
 			}
 
 		}
 	}
+}
+
+func (kv *KVServer) encodeSnapshot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.clientId2SerialNum)
+	e.Encode(kv.inMemoryDB)
+	//e.Encode(kv.lastApplied)
+	return w.Bytes()
+}
+
+func (kv *KVServer) decodeSnapshot(snapshot []byte) (map[int64]int, map[string]string) {
+	if snapshot == nil || len(snapshot) < 1 {
+		panic("empty snapshot")
+	}
+	var clt2SerialNum map[int64]int
+	var db map[string]string
+	//var lastApplied int
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	err := d.Decode(&clt2SerialNum)
+	if err != nil {
+		return nil, nil
+	}
+	err = d.Decode(&db)
+	if err != nil {
+		return nil, nil
+	}
+	return clt2SerialNum, db
 }
 
 // Kill
@@ -226,12 +276,19 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.persister = persister
 
 	// You may need initialization code here.
 	kv.inMemoryDB = make(map[string]string)
 	kv.logIdx2chan = make(map[int]chan Op)
 	kv.clientId2SerialNum = make(map[int64]int)
 	kv.lastApplied = 0
+	snapshot := persister.ReadSnapshot()
+	if snapshot != nil && len(snapshot) > 0 {
+		clt2SerialNum, db := kv.decodeSnapshot(snapshot)
+		kv.clientId2SerialNum = clt2SerialNum
+		kv.inMemoryDB = db
+	}
 	go func() {
 		for {
 			kv.mu.Lock()
