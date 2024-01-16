@@ -150,7 +150,7 @@ func (rf *Raft) changeStateAndReinitialize(role Role) {
 			rf.heartbeatTimeoutTicker.Reset(HEARTBEATTIMEOUT)
 			go rf.sendAppendEntriesToAllPeers()
 			// 3A: immediately commit a no-op log after being a leader?
-			go rf.Start("NOOP")
+			//go rf.Start("NOOP")
 			break
 		case FOLLOWER:
 			rf.state = FOLLOWER
@@ -880,7 +880,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.changeStateAndReinitialize(FOLLOWER) // leader -> follower
 	}
 	if rf.snapshot != nil && rf.snapshotLastIncludedIdx > args.LastIncludedIndex {
-		panic("why leader sends me a smaller snapshot?")
+		return // reject stale snapshot (not mentioned in paper)
 	}
 
 	/*
