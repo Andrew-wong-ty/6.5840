@@ -65,3 +65,31 @@ func DebugLog(topic logTopic, rf *Raft, format string, a ...interface{}) {
 		log.Printf(format, a...)
 	}
 }
+
+// logs2str
+//
+//	@Description: convert rf.logs to string. for debug
+//	@receiver rf
+//	@param logs
+//	@return string
+func (rf *Raft) logs2str(logs []Log) string {
+	res := ""
+	l := len(logs)
+	for idx, logItem := range logs {
+		//res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ", rf.physicalIdx2logIdx(idx), logItem.Term, convertCommandToString(logItem.Command))
+		if idx == 0 {
+			res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ...", idx, logItem.Term, convertCommandToString(logItem.Command))
+		}
+		if idx >= l-1 {
+			res += fmt.Sprintf("{idx=%v t=%v cmd=%v}, ", idx, logItem.Term, convertCommandToString(logItem.Command))
+
+		}
+	}
+	return "[" + res + "]"
+}
+
+func (rf *Raft) printAllIndicesAndTermsStates() string {
+	res := fmt.Sprintf("T=%v, 1stLogIdx=%v, lastLogIdx=%v, logLen=%v, comittedIdx=%v, lastAppliedIdx=%v, SnapLastIncludeIdx=%v, SnapLastIncludeTerm=%v, ",
+		rf.currentTerm, rf.firstLogIdx, rf.getLastLogIndex(), len(rf.logs), rf.commitIndex, rf.lastApplied, rf.snapshotLastIncludedIdx, rf.snapshotLastIncludedTerm)
+	return res
+}

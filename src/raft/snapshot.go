@@ -1,5 +1,7 @@
 package raft
 
+import "fmt"
+
 /****************************************************  InstallSnapshot  *******************************************************/
 
 type InstallSnapshotArgs struct {
@@ -73,26 +75,67 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	 5. Save snapshot file, discard any existing or partial snapshot with a smaller index
 	 6. If existing log entry has same index and term as snapshot’s last included entry, retain log entries following it and reply
 	 7. Discard the entire log
+	 8. Reset state machine using snapshot contents (and load snapshot’s cluster configuration)
 	*/
 	//update rf.logs
-	if rf.getLastLogIndex() <= args.LastIncludedIndex { //discard all logs: the snapshot covers all its logs (and its current snapshot, if it has one)
-		rf.logs = make([]Log, 1)
-	} else { // discard some of the logs
+	flag6 := false
+	for logIdx, log := range rf.logs {
+		if logIdx == 0 {
+			continue
+		}
+		if rf.physicalIdx2logIdx(logIdx) == args.LastIncludedIndex && log.Term == args.LastIncludedTerm {
+			DebugLog(dSnap, rf, "handle InstallSnapshot from%v; included_Idx found: %v, lastLog_Idx=%v", args.LeaderId, rf.physicalIdx2logIdx(logIdx), rf.getLastLogIndex())
+			flag6 = true
+			break
+		}
+	}
+
+	if flag6 { // do 6
 		newFirstLogIdx := args.LastIncludedIndex + 1
 		newLogs := make([]Log, 1)
 		newLogs = append(newLogs, rf.logs[rf.logIdx2physicalIdx(newFirstLogIdx):]...)
 		rf.logs = newLogs
+
+		// when the whole log is cleared, also do necessary 8
+		if len(newLogs) == 1 {
+			rf.commitIndex = args.LastIncludedIndex
+			rf.lastApplied = args.LastIncludedIndex
+		} else {
+			rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
+			rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
+		}
+
+	} else { // do 7 & 8
+		// do 7
+		rf.logs = make([]Log, 1)
+		// do 8
+		rf.commitIndex = args.LastIncludedIndex
+		rf.lastApplied = args.LastIncludedIndex
 	}
+	// update snapshot states
 	rf.snapshot = args.Data
 	rf.snapshotLastIncludedIdx = args.LastIncludedIndex
 	rf.snapshotLastIncludedTerm = args.LastIncludedTerm
-
 	rf.firstLogIdx = args.LastIncludedIndex + 1
-	rf.commitIndex = args.LastIncludedIndex
-	rf.lastApplied = args.LastIncludedIndex
-	DebugLog(dSnap, rf, "handle InstallSnapshot from%v, STATES: %v", args.LeaderId, rf.printAllIndicesAndTermsStates())
 
-	// 8. Reset state machine using snapshot contents (and load snapshot’s cluster configuration)
+	DebugLog(dSnap, rf, "handle InstallSnapshot from%v; retain=%v, STATES: %v", args.LeaderId, flag6, rf.printAllIndicesAndTermsStates())
+
+	//if rf.getLastLogIndex() <= args.LastIncludedIndex { //discard all logs: the snapshot covers all its logs (and its current snapshot, if it has one)
+	//	rf.logs = make([]Log, 1)
+	//} else { // discard some of the logs
+	//	newFirstLogIdx := args.LastIncludedIndex + 1
+	//	newLogs := make([]Log, 1)
+	//	newLogs = append(newLogs, rf.logs[rf.logIdx2physicalIdx(newFirstLogIdx):]...)
+	//	rf.logs = newLogs
+	//}
+	//rf.snapshot = args.Data
+	//rf.snapshotLastIncludedIdx = args.LastIncludedIndex
+	//rf.snapshotLastIncludedTerm = args.LastIncludedTerm
+	//
+	//rf.firstLogIdx = args.LastIncludedIndex + 1
+	//rf.commitIndex = args.LastIncludedIndex
+	//rf.lastApplied = args.LastIncludedIndex
+
 	msg := ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      rf.snapshot,
@@ -114,11 +157,17 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Task: trim logs to logs[index+1:], update firstLogIdx, and snapshotLastIncluded{Idx/Term}
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
-
-	if rf.firstLogIdx <= index /*assure this log index could be found in rf.logs*/ {
+	//! Note: the log having the firstLogIdx is non exist; consider refactor name:  rf.firstLogIdx -> rf.expectedFirstLogIdx
+	if rf.firstLogIdx < index /*assure this log index could be found in rf.logs*/ {
 		// snapshot parameters
 		newFirstLogIdx := index + 1
 		lastIncludedIdx := index
+		dbgIdx := rf.logIdx2physicalIdx(index)
+		if dbgIdx <= 0 || dbgIdx >= len(rf.logs) {
+			DebugLog(dError, rf, "snapshot invalid physical Idx: idx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
+			errMsg := fmt.Sprintf("error: invalid physical index, indx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
+			panic(errMsg)
+		}
 		lastIncludedTerm := rf.logs[rf.logIdx2physicalIdx(index)].Term
 		// generate new logs
 		newLogs := make([]Log, 1) // don't forget the dummy one
@@ -177,7 +226,7 @@ func (rf *Raft) logIdx2physicalIdx(index int) int {
 //
 //	@Description: get the index of server's last log entry
 //	@receiver rf
-//	@return int
+//	@return int 0 or last log's index
 func (rf *Raft) getLastLogIndex() int { // original log Index
 	if len(rf.logs) == 1 {
 		// rf.logs is empty, which only contains the dummynode Log{nil,0}.

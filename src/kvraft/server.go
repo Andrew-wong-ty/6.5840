@@ -142,6 +142,11 @@ func (kv *KVServer) dbToString() string {
 	return "[" + res + "]"
 }
 
+// applier keep handling the raft's apply. i.e., when the raft determines to apply a command, it will send a ApplyMsg
+// to this chan. So this function just keep receiving and handling the ApplyMsg. It handles it in this way:
+//  1. If the apply message is applying a command, and the command is not stale, it notifies the Op (e.g., put/append)
+//     is applied in the DB, and the DB is updated. The notification is achieved by the responseChan
+//  2. If the apply message is applying a snapshot, it replaces the whole DB using the snapshot's Raft state (i.e. the DB state)
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
 		select {
@@ -173,11 +178,11 @@ func (kv *KVServer) applier() {
 					}
 					kv.clientId2SerialNum[op.ClientId] = op.SerialNum
 				}
-				DebugLog(dClient, "S%v (KV); currDB=%v", kv.me, kv.dbToString())
+				//DebugLog(dClient, "S%v (KV); currDB=%v", kv.me, kv.dbToString())
 
 				//  notify kvserver who is waiting for result
 				responseChan := kv.getResponseChan(msg.CommandIndex)
-				responseChan <- op
+				responseChan <- op //! possible deadlock if responseChan is un-buffered
 
 				// check if snapshot is applicable
 				if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
@@ -274,8 +279,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.applyCh = make(chan raft.ApplyMsg) // Once the command is applied by the raft, it sends the ApplyMsg to this chan
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf.SetHeartbeatTimeout(32 * time.Millisecond)
 	kv.persister = persister
 
 	// You may need initialization code here.
@@ -289,14 +295,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		kv.clientId2SerialNum = clt2SerialNum
 		kv.inMemoryDB = db
 	}
-	go func() {
-		for {
-			kv.mu.Lock()
-			DebugLog(dClient, "S%v (KV); aaaalive!!!!", kv.me)
-			kv.mu.Unlock()
-			time.Sleep(time.Second)
-		}
-	}()
+	//go func() {
+	//	for {
+	//		kv.mu.Lock()
+	//		DebugLog(dClient, "S%v (KV); aaaalive!!!!", kv.me)
+	//		kv.mu.Unlock()
+	//		time.Sleep(time.Second)
+	//	}
+	//}()
 	go kv.applier()
 	return kv
 }

@@ -73,20 +73,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) doCommand(req CommandRequest) string {
-
-	DebugLog(dClient, "Client Initial: ClientID=%v OP=%v k=%v v=%v", req.ClientId, req.OpType, req.Key, req.Value)
-
 	ck.mutex.Lock()
 	leader := ck.leaderId
 	ck.mutex.Unlock()
 	for {
 		rsp := CommandResponse{}
 		req.TransId = nrand()
-		DebugLog(dClient, "Client Called: leaderId=%v, transId=%v", leader, req.TransId)
 		ok := ck.servers[leader].Call("KVServer.CommandHandler", &req, &rsp)
 		if ok {
 			if rsp.Err == OK || rsp.Err == ErrNoKey {
-				DebugLog(dClient, "Client Done: leaderId=%v/%v, transId=%v OP=%v k=%v v=%v", leader, rsp.LeaderId, req.TransId, req.OpType, req.Key, req.Value)
 				ck.mutex.Lock()
 				ck.leaderId = leader
 				ck.serialNum++

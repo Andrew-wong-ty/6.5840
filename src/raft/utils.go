@@ -26,7 +26,7 @@ func min(a int, b int) int {
 }
 
 func randomElectionDuration() time.Duration {
-	ms := 500 + (rand.Int63() % 200)
+	ms := 500 + (rand.Int63() % 50) //ok 500+-50
 	duration := time.Duration(ms) * time.Millisecond
 	return duration
 }
