@@ -215,9 +215,9 @@ func (rf *Raft) logIdx2physicalIdx(index int) int {
 		return 0
 	} else {
 		res := index - rf.firstLogIdx + 1
-		//if res < 0 {
-		//	DebugLog(dWarn, rf, "logIdx2physicalIdx result is negative, index=%v, firstLogIdx=%v", index, rf.firstLogIdx)
-		//}
+		if res <= 0 || res >= len(rf.logs) {
+			DebugLog(dError, rf, "possible invalid physical Idx: idx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
+		}
 		return res
 	}
 }

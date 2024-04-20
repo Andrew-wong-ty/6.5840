@@ -27,6 +27,7 @@ type AppendEntriesReply struct {
 	can include the term of the conflicting entry and
 	the first index it stores for that term.
 	*/
+	// 'X' means 'conflict'
 	XTerm  int //term in the conflicting entry (if any)
 	XIndex int //index of first entry with that term (if any)
 	XLen   int //log length

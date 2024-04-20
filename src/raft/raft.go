@@ -18,7 +18,7 @@ package raft
 //
 
 import (
-	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,117 +56,33 @@ type Log struct {
 	Term    int // first index is 1
 }
 
-type LeaderState struct {
-	nextIndex  []int
-	matchIndex []int
-}
-
 type Role string
-
-const (
-	FOLLOWER  Role = "follower"
-	CANDIDATE      = "candidate"
-	LEADER         = "leader"
-)
 
 // Raft a single Raft peer.
 type Raft struct {
-	mutex     sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-
-	//! persistent states
-	currentTerm int
-	votedFor    *int // todo: change its type to int (-1)
-	logs        []Log
-
-	//! volatile states (all server)
-	commitIndex int // index of highest log entry known to be committed (done)
-	lastApplied int // index of highest log entry applied to state machine
-	//! volatile states (leader)
-	nextIndex  []int //for each server, index of the next log entry to send to that server (initialized to leaderlast log index + 1)
-	matchIndex []int // for each server, index of highest log entry known to be replicated (done) on server
-
-	state Role // roles: {follower/candidate/leader}
-
-	//! for leader election,
-	electionTimeoutTicker *time.Ticker
-
-	//! for managing heartbeat
-	heartbeatTimeoutTicker *time.Ticker
-
-	//  for notify apply
-	applyCond *sync.Cond
-	applyChan chan ApplyMsg
-
-	//! lab 2d
-	firstLogIdx              int    // the log index of the first Log item in rf.logs
-	snapshot                 []byte // this raft server's most recent snapshot
-	snapshotLastIncludedIdx  int
-	snapshotLastIncludedTerm int
-
-	//! Timeouts
-	heartbeatTimeout time.Duration
-}
-
-// changeStateAndReinitialize
-//
-//	@Description: transit state between roles of follower/candidate/leader,
-//	and reinitialize (e.g. reset/stop ticker, reallocate nextIndex and matchIndex)
-//	@receiver rf
-//	@param role: initial role {follower/candidate/leader}
-func (rf *Raft) changeStateAndReinitialize(role Role) {
-	if rf.state == role {
-		return
-	}
-	DebugLog(dInfo, rf, "role transfer from %v to %v, stop heartbeat", string(rf.state), string(role))
-	// leader -> {follower/candidate}
-	if rf.state == LEADER {
-		switch role {
-		case FOLLOWER:
-			rf.state = FOLLOWER
-			rf.heartbeatTimeoutTicker.Stop()
-			rf.resetElectionTicker()
-			break
-		case CANDIDATE:
-			rf.state = CANDIDATE
-			rf.heartbeatTimeoutTicker.Stop()
-			rf.resetElectionTicker()
-			break
-		}
-	} else { // follower/candidate -> {follower/candidate/leader}
-		switch role {
-		case LEADER: // to be leader, and send heartbeat immediately
-			rf.state = LEADER
-			// stop election ticker
-			rf.electionTimeoutTicker.Stop()
-			// reinitialized matchIndex[] and nextIndex[]
-			for i := 0; i < len(rf.peers); i++ {
-				rf.nextIndex[i] = rf.getLastLogIndex() + 1
-				rf.matchIndex[i] = 0
-			}
-			// immediately trigger a heartbeat
-			rf.heartbeatTimeoutTicker.Reset(rf.heartbeatTimeout)
-			go rf.sendAppendEntriesToAllPeers()
-			// 3A: immediately commit a no-op log after being a leader?
-			//go rf.Start("NOOP")
-			break
-		case FOLLOWER:
-			rf.state = FOLLOWER
-			break
-		case CANDIDATE:
-			rf.state = CANDIDATE
-			break
-		}
-	}
-}
-
-func (rf *Raft) resetElectionTicker() time.Duration {
-	duration := randomElectionDuration()
-	rf.electionTimeoutTicker.Reset(duration)
-	return duration
+	mutex                    sync.Mutex          // a lock to protect the followings
+	peers                    []*labrpc.ClientEnd // RPC end points of all peers
+	persister                *Persister          // Object to hold this peer's persisted state
+	me                       int                 // this peer's index into peers[]
+	state                    Role                // this machine's role: {follower/candidate/leader}
+	dead                     int32               // set by Kill()
+	currentTerm              int                 // @ persistent-state
+	votedFor                 *int                // @ persistent-state
+	logs                     []Log               // @ persistent-state
+	commitIndex              int                 // @ volatile-state-all-server; index of highest log entry known to be committed
+	lastApplied              int                 // @ volatile-state-all-server; index of highest log entry applied to state machine
+	nextIndex                []int               // for each server, index of the next log entry to send to that server (initialized to leader's last log index + 1)
+	matchIndex               []int               // for each server, index of highest log entry known to be replicated (done) on server
+	electionTimeoutTicker    *time.Ticker        // a ticker to notify election timeout
+	heartbeatTimeoutTicker   *time.Ticker        // a ticker to notify send AppendEntries to followers
+	applyCond                *sync.Cond          // Condition variable to wait for committedIndex > lastApplied
+	applyChan                chan ApplyMsg       // Send the applied ApplyMsg to the services (kvraft/tester)
+	firstLogIdx              int                 // @Snapshot; the log index of the first Log item in rf.logs
+	snapshot                 []byte              // @Snapshot; this raft server's most recent snapshot
+	snapshotLastIncludedIdx  int                 // @Snapshot the latest snapshot's lasted included log's index
+	snapshotLastIncludedTerm int                 // @Snapshot; the latest snapshot's lasted included log's term
+	heartbeatTimeout         int64               // send AppendEntries(heartbeat) to followers every heartbeatTimeout ms
+	electionTimeout          int64               // election timeout in millisecond
 }
 
 // GetState return currentTerm and whether this server
@@ -182,44 +98,16 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isLeader
 }
 
-// applyCommittedLogs
-//
-//	@Description: A goroutine that apply committed logs. It will wait until appliedIdx<committedIdx
-//	@receiver rf
-func (rf *Raft) applyCommittedLogs() {
-	for rf.killed() == false {
-		rf.mutex.Lock()
-		for rf.lastApplied >= rf.commitIndex {
-			rf.applyCond.Wait() // wait until appliedIdx < committedIdx; and acquire lock again
-		}
-		index := rf.lastApplied + 1
-		dbgIdx := rf.logIdx2physicalIdx(index)
-		if dbgIdx <= 0 || dbgIdx >= len(rf.logs) {
-			DebugLog(dError, rf, "apply invalid physical Idx: idx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
-			errMsg := fmt.Sprintf("error: invalid physical index, indx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
-			panic(errMsg)
-		}
-		msg := ApplyMsg{
-			CommandValid: true,
-			Command:      rf.logs[rf.logIdx2physicalIdx(index)].Command, //! possible TestSnapshotRecoverManyClients3B bug here: invalid index
-			CommandIndex: index,
-		}
-		rf.lastApplied++
-		DebugLog(dCommit, rf, "committed {Idx=%v, T=%v, Cmd=%v}, lastApp=%v, cmitIdx=%v",
-			index, rf.logs[rf.logIdx2physicalIdx(index)].Term, rf.logs[rf.logIdx2physicalIdx(index)].Command, rf.lastApplied, rf.commitIndex)
-		rf.mutex.Unlock()
-		rf.applyChan <- msg // To prevent possible deadlock, put this outside the lock context
-	}
-}
-
-func (rf *Raft) SetHeartbeatTimeout(newTimeout time.Duration) {
+// SetHeartbeatTimeout set a new heartbeat timeout
+func (rf *Raft) SetHeartbeatTimeout(newTimeoutMillisecond int64) {
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
-	rf.heartbeatTimeout = newTimeout
+	rf.heartbeatTimeout = newTimeoutMillisecond
 }
 
-// Start an agreement on the next Command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
+// Start an agreement on the next Command to be appended to Raft's log.
+//
+// if this server isn't the leader, returns false. otherwise start the
 // agreement and return immediately. there is no guarantee that this
 // Command will ever be committed to the Raft log, since the leader
 // may fail or lose an election. even if the Raft instance has been killed,
@@ -232,7 +120,6 @@ func (rf *Raft) SetHeartbeatTimeout(newTimeout time.Duration) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-
 	// Your code here (2B).
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
@@ -245,14 +132,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term = rf.currentTerm
 	index = rf.getLastLogIndex()
 	DebugLog(dLog, rf, "new log arrives {idx=%v, t=%v, cmd=%v}", index, term, convertCommandToString(command))
-
 	/*
-		Note: don't do the following
-			rf.heartbeatTimeoutTicker.Reset(rf.heartbeatTimeout)
-			go rf.sendAppendEntriesToAllPeers()
-		immediately sent AppendEntries to followers will case possible bugs:
-		1. TestSnapshotBasic2D: multiple commits follow an install-snapshot, cause states can not be canceled
-		2. bugs in TestSnapshotRecoverManyClients3B, possible out of index bug
+			Note: don't immediately start send AppendEntries
+				rf.heartbeatTimeoutTicker.Reset(rf.heartbeatTimeout)
+				go rf.sendAppendEntriesToAllPeers()
+			immediately sent AppendEntries to followers will case possible bugs:
+		    0. The concurrency of install snapshot (AppendEntries) and sync logs (AppendEntries), undefined behavior.
+			1. TestSnapshotBasic2D: multiple commits follow an install-snapshot, cause states can not be canceled
+			2. bugs in TestSnapshotRecoverManyClients3B, possible out of index bug
 	*/
 	return index, term, true
 }
@@ -279,21 +166,6 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-// ticker is goroutine that receives msg from the election ticker and appendEntries ticker, and do correspondent actions
-func (rf *Raft) ticker() {
-	for rf.killed() == false {
-		select {
-		case <-rf.electionTimeoutTicker.C:
-			go rf.electMyselfToBeLeader()
-
-		case <-rf.heartbeatTimeoutTicker.C:
-			go rf.sendAppendEntriesToAllPeers()
-
-		}
-	}
-	DebugLog(dError, rf, "ticker ends since raft is killed")
-}
-
 // Make creates a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
@@ -305,7 +177,6 @@ func (rf *Raft) ticker() {
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	heartbeatTimeout := 60 * time.Millisecond // set it to be  >=50 ms to pass tests
 	rf := &Raft{
 		mutex:                    sync.Mutex{},
 		peers:                    peers,
@@ -314,36 +185,37 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		dead:                     0,
 		currentTerm:              0,
 		votedFor:                 nil,
-		logs:                     make([]Log, 1), // since log starts with index 1, the first element is a dummy one
+		logs:                     make([]Log, 1), // log starts with index 1
 		commitIndex:              0,
 		lastApplied:              0,
 		nextIndex:                make([]int, len(peers)),
 		matchIndex:               make([]int, len(peers)),
 		state:                    FOLLOWER,
-		electionTimeoutTicker:    time.NewTicker(randomElectionDuration()),
-		heartbeatTimeoutTicker:   time.NewTicker(heartbeatTimeout),
 		applyChan:                applyCh,
 		firstLogIdx:              1,
 		snapshot:                 nil,
 		snapshotLastIncludedTerm: -1,
 		snapshotLastIncludedIdx:  -1,
+		heartbeatTimeout:         60, // should be  >=50 ms to pass tests
+		electionTimeout:          500,
 	}
-	rf.heartbeatTimeout = heartbeatTimeout
+	rf.electionTimeoutTicker = time.NewTicker(time.Duration(rf.electionTimeout+(rand.Int63()%50)) * time.Millisecond)
+	rf.heartbeatTimeoutTicker = time.NewTicker(time.Duration(rf.heartbeatTimeout) * time.Millisecond)
 	rf.applyCond = sync.NewCond(&rf.mutex)
-	rf.heartbeatTimeoutTicker.Stop() // wait until being a leader
+	rf.heartbeatTimeoutTicker.Stop() // start the ticker only when it is the leader
 	rf.electionTimeoutTicker.Stop()
 
 	// Your initialization code here (2A, 2B, 2C).
-	// initialize from state persisted before a crash
+	// initialize from state persisted before the crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
 	// start the goroutine to commit logs
 	go rf.applyCommittedLogs()
-	//go rf.sendHeartbeats()
-	DebugLog(dInfo, rf, "Raft server is made, nPeers=%v", len(peers))
 	// start election ticker
-	rf.electionTimeoutTicker.Reset(randomElectionDuration())
+	rf.resetElectionTicker()
+	DebugLog(dInfo, rf, "Raft server is made, nPeers=%v, electionTimeout=%v, appendEntriesTimeout=%v", len(peers), rf.electionTimeout, rf.heartbeatTimeout)
+
 	return rf
 }

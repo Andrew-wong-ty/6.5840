@@ -281,7 +281,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg) // Once the command is applied by the raft, it sends the ApplyMsg to this chan
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.rf.SetHeartbeatTimeout(32 * time.Millisecond)
+	kv.rf.SetHeartbeatTimeout(32)
 	kv.persister = persister
 
 	// You may need initialization code here.

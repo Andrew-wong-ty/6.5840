@@ -25,11 +25,6 @@ func min(a int, b int) int {
 	return m
 }
 
-func randomElectionDuration() time.Duration {
-	ms := 500 + (rand.Int63() % 50) //ok 500+-50
-	duration := time.Duration(ms) * time.Millisecond
-	return duration
-}
 func generateRandomString(length int) string {
 	rand.New(rand.NewSource(time.Now().UnixNano()))
 	result := make([]byte, length)
