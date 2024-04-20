@@ -9,6 +9,7 @@ import (
 
 // import "time"
 
+// check if the latest config can match the groups, and if shard is balanced
 func check(t *testing.T, groups []int, ck *Clerk) {
 	c := ck.Query(-1)
 	if len(c.Groups) != len(groups) {
@@ -34,7 +35,7 @@ func check(t *testing.T, groups []int, ck *Clerk) {
 	}
 
 	// more or less balanced sharding?
-	counts := map[int]int{}
+	counts := map[int]int{} //gid -> shard counts
 	for _, g := range c.Shards {
 		counts[g] += 1
 	}
