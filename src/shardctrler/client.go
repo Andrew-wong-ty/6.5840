@@ -4,7 +4,10 @@ package shardctrler
 // Shardctrler clerk.
 //
 
-import "6.5840/labrpc"
+import (
+	"6.5840/labrpc"
+	"sync"
+)
 import "time"
 import "crypto/rand"
 import "math/big"
@@ -12,6 +15,9 @@ import "math/big"
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
+	clientId  int64
+	mutex     sync.Mutex // protects the following
+	serialNum uint64     // the sequence number of next command
 }
 
 func nrand() int64 {
@@ -24,6 +30,9 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.clientId = nrand()
+	ck.serialNum = 0
+	ck.mutex = sync.Mutex{}
 	// Your code here.
 	return ck
 }
@@ -32,6 +41,12 @@ func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
 	// Your code here.
 	args.Num = num
+	// assign serial number to identify a request
+	ck.mutex.Lock()
+	ck.serialNum++
+	args.SerialNum = ck.serialNum
+	ck.mutex.Unlock()
+	args.ClientId = ck.clientId
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -49,6 +64,12 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args := &JoinArgs{}
 	// Your code here.
 	args.Servers = servers
+	// assign serial number to identify a request
+	ck.mutex.Lock()
+	ck.serialNum++
+	args.SerialNum = ck.serialNum
+	ck.mutex.Unlock()
+	args.ClientId = ck.clientId
 
 	for {
 		// try each known server.
@@ -67,6 +88,12 @@ func (ck *Clerk) Leave(gids []int) {
 	args := &LeaveArgs{}
 	// Your code here.
 	args.GIDs = gids
+	// assign serial number to identify a request
+	ck.mutex.Lock()
+	ck.serialNum++
+	args.SerialNum = ck.serialNum
+	ck.mutex.Unlock()
+	args.ClientId = ck.clientId
 
 	for {
 		// try each known server.
@@ -86,6 +113,12 @@ func (ck *Clerk) Move(shard int, gid int) {
 	// Your code here.
 	args.Shard = shard
 	args.GID = gid
+	// assign serial number to identify a request
+	ck.mutex.Lock()
+	ck.serialNum++
+	args.SerialNum = ck.serialNum
+	ck.mutex.Unlock()
+	args.ClientId = ck.clientId
 
 	for {
 		// try each known server.
