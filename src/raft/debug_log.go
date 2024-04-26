@@ -55,7 +55,7 @@ func init() {
 }
 
 func DebugLog(topic logTopic, rf *Raft, format string, a ...interface{}) {
-	if debugVerbosity >= 1 {
+	if debugVerbosity >= 2 {
 		currTime := time.Since(debugStart).Microseconds()
 		currTime /= 100
 		prefix := fmt.Sprintf("%06d %v ", currTime, string(topic))
