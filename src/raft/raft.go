@@ -117,6 +117,7 @@ func (rf *Raft) SetHeartbeatTimeout(newTimeoutMillisecond int64) {
 // if it's ever committed.
 // 2. The second return value is the current term.
 // 3. The third return value is true if this server believes it is the leader.
+// ! Note: the command's type must be comparable
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
