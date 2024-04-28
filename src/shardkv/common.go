@@ -10,23 +10,30 @@ package shardkv
 //
 
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongGroup  = "ErrWrongGroup"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK                 = "OK"
+	ErrNoKey           = "ErrNoKey"
+	ErrWrongGroup      = "ErrWrongGroup"
+	ErrWrongLeader     = "ErrWrongLeader"
+	ErrRepeatedRequest = "ErrRepeatedRequest"
+	ErrConfigNotReady  = "ErrConfigNotReady"
+)
+
+const (
+	GET    = "GET"
+	PUT    = "PUT"
+	APPEND = "APPEND"
 )
 
 type Err string
 
-// Put or Append
+// PutAppendArgs Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Key       string
+	Value     string
+	Op        string // "Put" or "Append"
+	ClientID  int64
+	SerialNum uint64
 }
 
 type PutAppendReply struct {
@@ -34,8 +41,9 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
+	Key       string
+	ClientID  int64
+	SerialNum uint64
 }
 
 type GetReply struct {
