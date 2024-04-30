@@ -40,6 +40,25 @@ const (
 
 type Err string
 
+type PostArgs struct {
+	ClientId      int64  // the client who initiated the request
+	SerialNum     uint64 // prevent duplicate requests (always>=1)
+	TransId       int64  // identifies an action
+	OperationType OpType
+	/**** Join ***/
+	Servers map[int][]string // new GID -> servers mappings
+	/**** Leave ***/
+	GIDs []int
+	/**** Move ***/
+	Shard int
+	GID   int
+}
+
+type PostReply struct {
+	WrongLeader bool
+	Err         Err
+}
+
 type JoinArgs struct {
 	Servers   map[int][]string // new GID -> servers mappings
 	ClientId  int64            // the client who initiated the request

@@ -37,6 +37,38 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	return ck
 }
 
+func (ck *Clerk) doGeneralPost(args *PostArgs) {
+	ck.mutex.Lock()
+	ck.serialNum++
+	args.SerialNum = ck.serialNum
+	ck.mutex.Unlock()
+	args.ClientId = ck.clientId
+	args.TransId = nrand()
+	for {
+		// try each known server.
+		for _, srv := range ck.servers {
+			var reply PostReply
+			ok := srv.Call("ShardCtrler.Post", args, &reply)
+			if ok && reply.WrongLeader == false {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (ck *Clerk) Join(servers map[int][]string) {
+	ck.doGeneralPost(&PostArgs{OperationType: JOIN, Servers: servers})
+}
+
+func (ck *Clerk) Leave(gids []int) {
+	ck.doGeneralPost(&PostArgs{OperationType: LEAVE, GIDs: gids})
+}
+
+func (ck *Clerk) Move(shard int, gid int) {
+	ck.doGeneralPost(&PostArgs{OperationType: MOVE, Shard: shard, GID: gid})
+}
+
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
 	// Your code here.
@@ -48,89 +80,16 @@ func (ck *Clerk) Query(num int) Config {
 	ck.mutex.Unlock()
 	args.ClientId = ck.clientId
 	args.TransId = nrand()
+	//log.Printf("trans=%v\n", args.TransId)
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
 			var reply QueryReply
+			//log.Printf("call ShardCtrler.Query trans=%v\n", args.TransId)
 			ok := srv.Call("ShardCtrler.Query", args, &reply)
+			//log.Printf("trans=%v, wrongLeader=%v\n", args.TransId, reply.WrongLeader)
 			if ok && reply.WrongLeader == false {
 				return reply.Config
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func (ck *Clerk) Join(servers map[int][]string) {
-	args := &JoinArgs{}
-	// Your code here.
-	args.Servers = servers
-	// assign serial number to identify a request
-	ck.mutex.Lock()
-	ck.serialNum++
-	args.SerialNum = ck.serialNum
-	ck.mutex.Unlock()
-	args.ClientId = ck.clientId
-	args.TransId = nrand()
-
-	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply JoinReply
-			ok := srv.Call("ShardCtrler.Join", args, &reply)
-			if ok && reply.WrongLeader == false {
-				return
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func (ck *Clerk) Leave(gids []int) {
-	args := &LeaveArgs{}
-	// Your code here.
-	args.GIDs = gids
-	// assign serial number to identify a request
-	ck.mutex.Lock()
-	ck.serialNum++
-	args.SerialNum = ck.serialNum
-	ck.mutex.Unlock()
-	args.ClientId = ck.clientId
-	args.TransId = nrand()
-
-	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply LeaveReply
-			ok := srv.Call("ShardCtrler.Leave", args, &reply)
-			if ok && reply.WrongLeader == false {
-				return
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func (ck *Clerk) Move(shard int, gid int) {
-	args := &MoveArgs{}
-	// Your code here.
-	args.Shard = shard
-	args.GID = gid
-	// assign serial number to identify a request
-	ck.mutex.Lock()
-	ck.serialNum++
-	args.SerialNum = ck.serialNum
-	ck.mutex.Unlock()
-	args.ClientId = ck.clientId
-	args.TransId = nrand()
-
-	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply MoveReply
-			ok := srv.Call("ShardCtrler.Move", args, &reply)
-			if ok && reply.WrongLeader == false {
-				return
 			}
 		}
 		time.Sleep(100 * time.Millisecond)

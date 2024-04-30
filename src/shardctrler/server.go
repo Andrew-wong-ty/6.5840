@@ -3,13 +3,11 @@ package shardctrler
 import (
 	"6.5840/raft"
 	"fmt"
+	"sync/atomic"
 )
 import "6.5840/labrpc"
 import "sync"
 import "6.5840/labgob"
-
-// TODO: 1. remove the Join, Leave, Move, Query's duplicated code
-// TODO: 2. logically divide the functions (e.g. the ones in the applier) into several .go files
 
 type OpType string
 
@@ -21,6 +19,7 @@ const (
 )
 
 type ShardCtrler struct {
+	dead               int32
 	me                 int
 	rf                 *raft.Raft
 	applyCh            chan raft.ApplyMsg
@@ -90,7 +89,7 @@ func (sc *ShardCtrler) getOpDoneChan(uid int64, commandIdx int) chan Op {
 		sc.opDoneChans[uid] = make(map[int]chan Op)
 	}
 	if _, hasKey := sc.opDoneChans[uid][commandIdx]; !hasKey {
-		sc.opDoneChans[uid][commandIdx] = make(chan Op, 1) // Note: must be unbuffered to avoid deadlock
+		sc.opDoneChans[uid][commandIdx] = make(chan Op, 8) // Note: must be unbuffered to avoid deadlock
 	}
 	return sc.opDoneChans[uid][commandIdx]
 }
@@ -102,6 +101,12 @@ func (sc *ShardCtrler) getOpDoneChan(uid int64, commandIdx int) chan Op {
 func (sc *ShardCtrler) Kill() {
 	sc.rf.Kill()
 	// Your code here, if desired.
+	atomic.StoreInt32(&sc.dead, 1)
+}
+
+func (sc *ShardCtrler) killed() bool {
+	z := atomic.LoadInt32(&sc.dead)
+	return z == 1
 }
 
 // Raft is needed by shardkv tester
@@ -117,6 +122,7 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 // me is the index of the current server in servers[].
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardCtrler {
 	sc := new(ShardCtrler)
+	sc.dead = 0
 	sc.me = me
 	// initialize the first configuration
 	sc.configs = make([]Config, 1)
@@ -125,12 +131,13 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	labgob.Register(Op{})
 	sc.applyCh = make(chan raft.ApplyMsg)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
-	sc.rf.SetHeartbeatTimeout(32)
+	sc.rf.SetHeartbeatTimeout(40)
 
 	// Your code here.
 	sc.clientId2SerialNum = make(map[int64]uint64)
 	sc.opDoneChans = make(map[int64]map[int]chan Op)
 	sc.lastApplied = 0
 	go sc.applier()
+	DebugLog(dQuery, nil, "shardctrler starts")
 	return sc
 }

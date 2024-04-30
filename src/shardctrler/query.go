@@ -1,6 +1,9 @@
 package shardctrler
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // The Query RPC's argument is a configuration number.
 // The shardctrler replies with the configuration that has that number.
@@ -8,16 +11,22 @@ import "fmt"
 // the shardctrler should reply with the latest configuration.
 // The result of Query(-1) should reflect every Join, Leave, or Move RPC that the shardctrler finished handling before it received the Query(-1) RPC.
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
+	DebugLog(dQuery, sc, "Query called, trans=%v", args.TransId)
+	if sc.killed() {
+		reply.WrongLeader = true
+		return
+	}
 	// Check it this machine is the leader; if not return
 	if _, isLeader := sc.rf.GetState(); !isLeader {
-		reply.Err = "this machine is not leader"
+		DebugLog(dQuery, sc, "this machine is not leader, trans=%v", args.TransId)
 		reply.WrongLeader = true
 		return
 	}
 	// check if this request is outdated or duplicated
+	DebugLog(dQuery, sc, "try lock, trans=%v", args.TransId)
 	sc.mu.Lock()
+	DebugLog(dQuery, sc, "locked, trans=%v", args.TransId)
 	if args.SerialNum <= sc.clientId2SerialNum[args.ClientId] {
-		reply.Err = "this is an outdated or duplicated request"
 		DebugLog(dQuery, sc, "this is an outdated or duplicated request")
 		reply.WrongLeader = false
 		sc.mu.Unlock()
@@ -33,8 +42,10 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 		QueryNum:      args.Num,
 	}
 	// Start an agreement on this op.
+	DebugLog(dQuery, sc, "starting agreement, trans=%v", args.TransId)
 	commandIdx, _, _ := sc.rf.Start(op)
 	if commandIdx == -1 {
+		DebugLog(dQuery, sc, "commandIdx == -1, trans=%v", args.TransId)
 		reply.WrongLeader = true
 		sc.mu.Unlock()
 		return
@@ -44,6 +55,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	DebugLog(dQuery, sc, "query start new agreement, cmdIdx=%v, trans=%v, cliId=%v, sNum=%v",
 		commandIdx, op.TransId, op.ClientId, op.SerialNum)
 	// Wait until this agreement is applied (timeout is introduced).
+	timer := time.NewTimer(500 * time.Millisecond)
 	select {
 	case doneOp := <-opDoneChan:
 		if doneOp.SerialNum == args.SerialNum && doneOp.ClientId == args.ClientId && doneOp.TransId == args.TransId {
@@ -62,7 +74,9 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 			//panic("bug persist")
 			//reply.WrongLeader = true
 		}
+	case <-timer.C:
+		reply.WrongLeader = true
 	}
 	// GC
-	go sc.deleteOpDoneChan(args.TransId, commandIdx)
+	sc.deleteOpDoneChan(args.TransId, commandIdx)
 }

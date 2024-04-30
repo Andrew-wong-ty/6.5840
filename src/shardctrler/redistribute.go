@@ -361,10 +361,9 @@ func deepCopyArray(source [NShards]int) [NShards]int {
 	return copyInts
 }
 
-// check if a config is a zero value
+// check if 1. groups are empty 2. shard values are zero
 func isCfgObjectZero(c Config) bool {
-	// Check if Groups is nil (not just empty)
-	if c.Groups != nil {
+	if len(c.Groups) != 0 {
 		return false
 	}
 	// Check if all elements in Shards are zero
