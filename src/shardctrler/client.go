@@ -47,6 +47,7 @@ func (ck *Clerk) Query(num int) Config {
 	args.SerialNum = ck.serialNum
 	ck.mutex.Unlock()
 	args.ClientId = ck.clientId
+	args.TransId = nrand()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -70,6 +71,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args.SerialNum = ck.serialNum
 	ck.mutex.Unlock()
 	args.ClientId = ck.clientId
+	args.TransId = nrand()
 
 	for {
 		// try each known server.
@@ -94,6 +96,7 @@ func (ck *Clerk) Leave(gids []int) {
 	args.SerialNum = ck.serialNum
 	ck.mutex.Unlock()
 	args.ClientId = ck.clientId
+	args.TransId = nrand()
 
 	for {
 		// try each known server.
@@ -119,6 +122,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 	args.SerialNum = ck.serialNum
 	ck.mutex.Unlock()
 	args.ClientId = ck.clientId
+	args.TransId = nrand()
 
 	for {
 		// try each known server.

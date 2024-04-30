@@ -1,5 +1,7 @@
 package shardctrler
 
+import "fmt"
+
 //
 // Shard controler: assigns shards to replication groups.
 //
@@ -28,6 +30,10 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+func (c *Config) String() string {
+	return fmt.Sprintf("Config{Num: %d, Shards: %v}", c.Num, convertToNewG2S(c.Shards))
+}
+
 const (
 	OK = "OK"
 )
@@ -38,22 +44,14 @@ type JoinArgs struct {
 	Servers   map[int][]string // new GID -> servers mappings
 	ClientId  int64            // the client who initiated the request
 	SerialNum uint64           // prevent duplicate requests (always>=1)
-}
-
-type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+	TransId   int64
 }
 
 type LeaveArgs struct {
 	GIDs      []int
 	ClientId  int64  // the client who initiated the request
 	SerialNum uint64 // prevent duplicate requests (always>=1)
-}
-
-type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
+	TransId   int64
 }
 
 type MoveArgs struct {
@@ -61,17 +59,29 @@ type MoveArgs struct {
 	GID       int
 	ClientId  int64  // the client who initiated the request
 	SerialNum uint64 // prevent duplicate requests (always>=1)
-}
-
-type MoveReply struct {
-	WrongLeader bool
-	Err         Err
+	TransId   int64
 }
 
 type QueryArgs struct {
 	Num       int    // desired config number
 	ClientId  int64  // the client who initiated the request
 	SerialNum uint64 // prevent duplicate requests (always>=1)
+	TransId   int64
+}
+
+type JoinReply struct {
+	WrongLeader bool
+	Err         Err
+}
+
+type LeaveReply struct {
+	WrongLeader bool
+	Err         Err
+}
+
+type MoveReply struct {
+	WrongLeader bool
+	Err         Err
 }
 
 type QueryReply struct {

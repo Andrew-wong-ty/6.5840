@@ -55,7 +55,7 @@ func FirstJoin(joinArgs JoinArgs) (firstCfg Config) {
 // Some GIDs that are leaving may not have been assigned shards.
 // In this case, remove them from both currCfg.Groups and leaveArgs.GIDs
 func updateByRemoveGIDsWithoutSignedShards(currCfg Config, leaveArgs LeaveArgs) (updatedCfg Config, updatedLeaveArgs LeaveArgs) {
-	updatedCfg = deepCopyConfig(currCfg)
+	updatedCfg = DeepCopyConfig(currCfg)
 	updatedLeaveArgs = leaveArgs // shallow copy
 	gid2shards := convertToNewG2S(currCfg.Shards)
 	newLeaveGIDs := make([]int, 0)
@@ -105,7 +105,7 @@ func Leave(currCfg Config, leaveArgs LeaveArgs) (newCfg Config) {
 	currCfg, leaveArgs = updateByRemoveGIDsWithoutSignedShards(currCfg, leaveArgs)
 	// if no GIDs are leaving, return a copied one with incremented Num
 	if len(leaveArgs.GIDs) == 0 {
-		newCfg = deepCopyConfig(currCfg)
+		newCfg = DeepCopyConfig(currCfg)
 		newCfg.Num = currCfg.Num + 1
 		return
 	}
@@ -205,7 +205,7 @@ func Move(currCfg Config, moveArgs MoveArgs) (newCfg Config) {
 }
 
 func Join(currCfg Config, joinArgs JoinArgs) (newCfg Config) {
-	dbgMsg := fmt.Sprintf("[JOIN] called, curr=%v, joinArgs=%v, res=%v\n", printCfg(currCfg), joinArgs, printCfg(newCfg))
+	dbgMsg := fmt.Sprintf("[JOIN] called, curr=%v, joinArgs=%v", printCfg(currCfg), joinArgs)
 	if isCfgObjectZero(currCfg) {
 		cfg := FirstJoin(joinArgs)
 		newCfg.Num = currCfg.Num + 1
@@ -270,7 +270,7 @@ func Join(currCfg Config, joinArgs JoinArgs) (newCfg Config) {
 	newCfg.Num = currCfg.Num + 1
 	newCfg.Shards = shard2gid
 	newCfg.Groups = newGroups
-	DebugLog(dJoin, nil, dbgMsg)
+	DebugLog(dJoin, nil, dbgMsg+fmt.Sprintf(" res=%v", printCfg(newCfg)))
 	checkCfgValid(newCfg)
 	return
 }
@@ -376,6 +376,20 @@ func isCfgObjectZero(c Config) bool {
 	return true
 }
 
+func IsConfigZero(c Config) bool {
+	// Check if all elements in Shards are zero
+	for _, shard := range c.Shards {
+		if shard != 0 {
+			return false
+		}
+	}
+	// Check if Groups is nil (not just empty)
+	if c.Num == 0 && (c.Groups == nil || len(c.Groups) == 0) {
+		return true
+	}
+	return false
+}
+
 // checkCfgValid determines if a config is valid by checking
 // 1. if shards.groups.len <10, cfg.groups and groups in shard must match each other
 // 2. else, the groups in shards must present in cfg.groups
@@ -384,7 +398,7 @@ func checkCfgValid(cfg Config) {
 	// gids should be presented in cfg.groups
 	for gid, _ := range gid2shards {
 		if _, exist := cfg.Groups[gid]; !exist {
-			panic(fmt.Sprintf("gid %v is not presented in cfg.Groups (%v)", gid, cfg.Groups))
+			panic(fmt.Sprintf("gid %v is not presented in cfg.Groups (%v); cfg=%v", gid, cfg.Groups, cfg.String()))
 		}
 	}
 	if len(gid2shards) < 10 {
@@ -402,10 +416,10 @@ func checkCfgValid(cfg Config) {
 func printCfg(cfg Config) string {
 	gid2shards := printGID2Shards(convertToNewG2S(cfg.Shards))
 	groups := cfg.Groups
-	return fmt.Sprintf("{gid2shards=%v, groups=%v, lenG=%v}", gid2shards, groups, len(groups))
+	return fmt.Sprintf("{num= %v gid2shards=%v, groups=%v, lenG=%v}", cfg.Num, gid2shards, groups, len(groups))
 }
 
-func deepCopyConfig(currCfg Config) (newCfg Config) {
+func DeepCopyConfig(currCfg Config) (newCfg Config) {
 	newCfg.Num = currCfg.Num
 	newCfg.Shards = deepCopyArray(currCfg.Shards)
 	newCfg.Groups = deepCopyMap(currCfg.Groups)
@@ -415,7 +429,7 @@ func deepCopyConfig(currCfg Config) (newCfg Config) {
 // newCfgWhenGroupFull each shard has been allocated to a distinct group. So the currently joining groups should
 // not affect the shard <-> groups relations. Therefore, return a new config with updated groups.
 func newCfgWhenGroupFull(currCfg Config, joinArgs JoinArgs) (newCfg Config) {
-	newCfg = deepCopyConfig(currCfg)
+	newCfg = DeepCopyConfig(currCfg)
 	newCfg.Num = currCfg.Num + 1
 	for gid, servers := range joinArgs.Servers {
 		newCfg.Groups[gid] = servers

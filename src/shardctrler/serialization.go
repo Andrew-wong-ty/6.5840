@@ -40,6 +40,9 @@ func deserializeGidLeaved(data string) []int {
 // Deserialize Config
 func deserializeQueryRes(data string) Config {
 	var cfg Config
+	if data == "" {
+		return cfg
+	}
 	err := json.Unmarshal([]byte(data), &cfg)
 	if err != nil {
 		panic(fmt.Sprintf("deserializeQueryRes err, obj=%v", data))

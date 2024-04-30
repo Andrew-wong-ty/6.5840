@@ -19,7 +19,8 @@ func (sc *ShardCtrler) applier() {
 				}
 				// check lastApplied index
 				if msg.CommandIndex <= sc.lastApplied {
-					DebugLog(dJoin, sc, "outdated commit")
+					DebugLog(dJoin, sc, "outdated commit, op.SerialNum=%v, now=%v, op=%v",
+						op.SerialNum, sc.clientId2SerialNum[op.ClientId], op.String())
 					sc.mu.Unlock()
 					continue
 				}
@@ -31,16 +32,26 @@ func (sc *ShardCtrler) applier() {
 				switch op.OperationType {
 				case JOIN:
 					if len(sc.configs) == 1 {
-						cfg := FirstJoin(JoinArgs{Servers: deserializeServersJoined(op.SerializedServersJoined), ClientId: op.ClientId, SerialNum: op.SerialNum})
+						cfg := FirstJoin(JoinArgs{
+							Servers:   deserializeServersJoined(op.SerializedServersJoined),
+							ClientId:  op.ClientId,
+							SerialNum: op.SerialNum,
+							TransId:   op.TransId,
+						})
 						sc.configs = append(sc.configs, cfg)
-						DebugLog(dJoin, sc, "[APPLIER] join action done, cmdIdx=%v, len Cfgs=%v, => first join res=%v, allcfgs=%v",
-							msg.CommandIndex, len(sc.configs), printGID2Shards(convertToNewG2S(cfg.Shards)), sc.printAllCfgs())
+						DebugLog(dJoin, sc, "[APPLIER] join action done, cmdIdx=%v, len Cfgs=%v, => first join res=%v, allcfgs=%v trans=%v",
+							msg.CommandIndex, len(sc.configs), printGID2Shards(convertToNewG2S(cfg.Shards)), sc.printAllCfgs(), op.TransId)
 					} else {
-						cfg := Join(lastCfg, JoinArgs{Servers: deserializeServersJoined(op.SerializedServersJoined), ClientId: op.ClientId, SerialNum: op.SerialNum})
+						cfg := Join(lastCfg, JoinArgs{
+							Servers:   deserializeServersJoined(op.SerializedServersJoined),
+							ClientId:  op.ClientId,
+							SerialNum: op.SerialNum,
+							TransId:   op.TransId,
+						})
 						sc.configs = append(sc.configs, cfg)
-						DebugLog(dJoin, sc, "[APPLIER] join action done, cmdIdx=%v, len Cfgs=%v, => ori=%v, now=%v, allcfgs=%v",
+						DebugLog(dJoin, sc, "[APPLIER] join action done, cmdIdx=%v, len Cfgs=%v, => ori=%v, now=%v, allcfgs=%v trans=%v",
 							msg.CommandIndex, len(sc.configs),
-							printGID2Shards(convertToNewG2S(lastCfg.Shards)), printGID2Shards(convertToNewG2S(cfg.Shards)), sc.printAllCfgs())
+							printGID2Shards(convertToNewG2S(lastCfg.Shards)), printGID2Shards(convertToNewG2S(cfg.Shards)), sc.printAllCfgs(), op.TransId)
 					}
 					break
 				case LEAVE:
@@ -51,9 +62,9 @@ func (sc *ShardCtrler) applier() {
 					} else {
 						cfg := Leave(lastCfg, LeaveArgs{GIDs: deserializeGidLeaved(op.SerializedGidLeaved), ClientId: op.ClientId, SerialNum: op.SerialNum})
 						sc.configs = append(sc.configs, cfg)
-						DebugLog(dLeave, sc, "[APPLIER] leave action done, cmdIdx=%v, len Cfgs=%v, => ori=%v, now=%v, allcfgs=%v",
+						DebugLog(dLeave, sc, "[APPLIER] leave action done, cmdIdx=%v, len Cfgs=%v, => ori=%v, now=%v, allcfgs=%v trans=%v",
 							msg.CommandIndex, len(sc.configs),
-							printGID2Shards(convertToNewG2S(lastCfg.Shards)), printGID2Shards(convertToNewG2S(cfg.Shards)), sc.printAllCfgs())
+							printGID2Shards(convertToNewG2S(lastCfg.Shards)), printGID2Shards(convertToNewG2S(cfg.Shards)), sc.printAllCfgs(), op.TransId)
 					}
 					break
 				case MOVE:
@@ -83,12 +94,12 @@ func (sc *ShardCtrler) applier() {
 						Shards: targetCfg.Shards,
 						Groups: targetCfg.Groups,
 					})
-					DebugLog(dQuery, sc, "[APPLIER] query action done, cmdIdx=%v, allcfgs=%v", msg.CommandIndex, sc.printAllCfgs())
+					DebugLog(dQuery, sc, "[APPLIER] query action done, cmdIdx=%v, allcfgs=%v, trans=%v", msg.CommandIndex, sc.printAllCfgs(), op.TransId)
 					break
 				default:
 					panic(fmt.Sprintf("unexpected op type=%v", op.OperationType))
 				}
-				opDoneChan := sc.getOpDoneChan(msg.CommandIndex)
+				opDoneChan := sc.getOpDoneChan(op.TransId, msg.CommandIndex)
 				opDoneChan <- op // notifier the function who is waiting
 				sc.mu.Unlock()
 

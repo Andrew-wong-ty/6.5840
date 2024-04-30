@@ -23,6 +23,7 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 
 	// create a unique identifier for this operation
 	op := Op{
+		TransId:             args.TransId,
 		ClientId:            args.ClientId,
 		SerialNum:           args.SerialNum,
 		OperationType:       LEAVE,
@@ -30,13 +31,19 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	}
 	// Start an agreement on this op.
 	commandIdx, _, _ := sc.rf.Start(op)
-	opDoneChan := sc.getOpDoneChan(commandIdx)
+	if commandIdx == -1 {
+		reply.WrongLeader = true
+		sc.mu.Unlock()
+		return
+	}
+	opDoneChan := sc.getOpDoneChan(args.TransId, commandIdx)
 	sc.mu.Unlock()
-
+	DebugLog(dLeave, sc, "leave start new agreement, cmdIdx=%v, trans=%v, cliId=%v, sNum=%v",
+		commandIdx, op.TransId, op.ClientId, op.SerialNum)
 	// Wait until this agreement is applied (timeout is introduced).
 	select {
 	case doneOp := <-opDoneChan:
-		if doneOp.SerialNum == args.SerialNum && doneOp.ClientId == args.ClientId {
+		if doneOp.SerialNum == args.SerialNum && doneOp.ClientId == args.ClientId && doneOp.TransId == args.TransId {
 			reply.Err = doneOp.ErrMsg
 			reply.WrongLeader = false
 			DebugLog(dLeave, sc, "leave done, SerialNum=%v", doneOp.SerialNum)
@@ -45,9 +52,5 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 		}
 	}
 	// GC
-	go func() {
-		sc.mu.Lock()
-		delete(sc.opDoneChans, commandIdx)
-		sc.mu.Unlock()
-	}()
+	go sc.deleteOpDoneChan(args.TransId, commandIdx)
 }

@@ -26,18 +26,19 @@ type ShardCtrler struct {
 	applyCh            chan raft.ApplyMsg
 	mu                 sync.Mutex // protects all the followings
 	lastApplied        int
-	configs            []Config               // indexed by config num
-	opDoneChans        map[int]chan Op        // used for notify an Op is done
-	clientId2SerialNum map[int64]uint64       // keep tracks of the current SerialNum of a client
-	joinArgChan        map[int]chan JoinArgs  // commitId -> arg
-	leaveArgChan       map[int]chan LeaveArgs // commitId -> arg
-	queryResultChan    map[int]chan Config    // commitId -> cfg
+	configs            []Config                  // indexed by config num
+	opDoneChans        map[int64]map[int]chan Op // used for notify an Op is done (unique id -> {commitIdx -> chan}
+	clientId2SerialNum map[int64]uint64          // keep tracks of the current SerialNum of a client
+	joinArgChan        map[int]chan JoinArgs     // commitId -> arg
+	leaveArgChan       map[int]chan LeaveArgs    // commitId -> arg
+	queryResultChan    map[int]chan Config       // commitId -> cfg
 }
 
 // Op represents an operation that is going to be applied on the shard controller
 type Op struct {
 	ErrMsg        Err
 	ClientId      int64
+	TransId       int64
 	SerialNum     uint64
 	OperationType OpType
 	// Join(servers) -- add a set of groups (gid -> server-list mapping).
@@ -53,22 +54,45 @@ type Op struct {
 	QueryLenCfg        int
 }
 
-func (c *Config) String() string {
-	return fmt.Sprintf("Config{Num: %d, Shards: %v, Groups: %v}", c.Num, c.Shards, c.Groups)
-}
-
 // String provides a string representation of an Op.
 func (o *Op) String() string {
-	return fmt.Sprintf("Op{\n  ErrMsg: %v,\n  ClientId: %d,\n  SerialNum: %d,\n  OperationType: %v,\n  ServersJoined: %v,\n  GidLeaved: %v,\n  ShardMoved: %d,\n  GidMovedTo: %d,\n  QueryNum: %d,\n  QueryRes: %v,\n  QueryLenCfg: %d\n}",
-		o.ErrMsg, o.ClientId, o.SerialNum, o.OperationType, o.SerializedServersJoined, o.SerializedGidLeaved, o.ShardMoved, o.GidMovedTo, o.QueryNum, o.SerializedQueryRes, o.QueryLenCfg)
+	if o.OperationType == JOIN {
+		return fmt.Sprintf("Op{ op: %v, ErrMsg: %v,  ClientId: %v,  SerialNum: %v, transId=%v,  ServersJoined: %v, }",
+			o.OperationType, o.ErrMsg, o.ClientId, o.SerialNum, o.TransId, deserializeServersJoined(o.SerializedServersJoined))
+	} else if o.OperationType == LEAVE {
+		return fmt.Sprintf("Op{ op: %v, ErrMsg: %v,  ClientId: %v,  SerialNum: %v, transId=%v, gidsLeave: %v, }",
+			o.OperationType, o.ErrMsg, o.ClientId, o.SerialNum, o.TransId, deserializeGidLeaved(o.SerializedGidLeaved))
+	} else if o.OperationType == MOVE {
+		return fmt.Sprintf("Op{ op: %v, ErrMsg: %v,  ClientId: %v,  SerialNum: %v, transId=%v, ShardMoved: %v, GidMovedTo: %v }",
+			o.OperationType, o.ErrMsg, o.ClientId, o.SerialNum, o.TransId, o.ShardMoved, o.GidMovedTo)
+	} else if o.OperationType == QUERY {
+		return fmt.Sprintf("Op{ op: %v, ErrMsg: %v,  ClientId: %v,  SerialNum: %v, transId=%v, QueryNum: %v, QueryRe: %v, len=%v }",
+			o.OperationType, o.ErrMsg, o.ClientId, o.SerialNum, o.TransId, o.QueryNum, deserializeQueryRes(o.SerializedQueryRes), o.QueryLenCfg)
+	} else {
+		return fmt.Sprintf("Op{ op: %v, ErrMsg: %v,  ClientId: %v,  SerialNum: %v, transId=%v }",
+			o.OperationType, o.ErrMsg, o.ClientId, o.SerialNum, o.TransId)
+	}
+
+}
+
+func (sc *ShardCtrler) deleteOpDoneChan(uid int64, commandIdx int) {
+	sc.mu.Lock()
+	delete(sc.opDoneChans[uid], commandIdx)
+	if len(sc.opDoneChans[uid]) == 0 {
+		delete(sc.opDoneChans, uid)
+	}
+	sc.mu.Unlock()
 }
 
 // getOpDoneChan returns an op-done-notification-chan for a given commandIdx
-func (sc *ShardCtrler) getOpDoneChan(commandIdx int) chan Op {
-	if _, hasKey := sc.opDoneChans[commandIdx]; !hasKey {
-		sc.opDoneChans[commandIdx] = make(chan Op, 1) // Note: must be unbuffered to avoid deadlock
+func (sc *ShardCtrler) getOpDoneChan(uid int64, commandIdx int) chan Op {
+	if _, hasClientIdKey := sc.opDoneChans[uid]; !hasClientIdKey {
+		sc.opDoneChans[uid] = make(map[int]chan Op)
 	}
-	return sc.opDoneChans[commandIdx]
+	if _, hasKey := sc.opDoneChans[uid][commandIdx]; !hasKey {
+		sc.opDoneChans[uid][commandIdx] = make(chan Op, 1) // Note: must be unbuffered to avoid deadlock
+	}
+	return sc.opDoneChans[uid][commandIdx]
 }
 
 // Kill is called by the tester when a ShardCtrler instance won't
@@ -105,7 +129,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 
 	// Your code here.
 	sc.clientId2SerialNum = make(map[int64]uint64)
-	sc.opDoneChans = make(map[int]chan Op)
+	sc.opDoneChans = make(map[int64]map[int]chan Op)
 	sc.lastApplied = 0
 	go sc.applier()
 	return sc
