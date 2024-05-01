@@ -60,7 +60,7 @@ type Role string
 
 // Raft a single Raft peer.
 type Raft struct {
-	mutex                    sync.Mutex          // a lock to protect the followings
+	mutex                    sync.RWMutex        // a lock to protect the followings
 	peers                    []*labrpc.ClientEnd // RPC end points of all peers
 	persister                *Persister          // Object to hold this peer's persisted state
 	me                       int                 // this peer's index into peers[]
@@ -91,10 +91,10 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	var isLeader bool
-	rf.mutex.Lock()
+	rf.mutex.RLock()
 	term = rf.currentTerm
 	isLeader = rf.state == LEADER
-	rf.mutex.Unlock()
+	rf.mutex.RUnlock()
 	return term, isLeader
 }
 
@@ -179,7 +179,7 @@ func (rf *Raft) killed() bool {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		mutex:                    sync.Mutex{},
+		mutex:                    sync.RWMutex{},
 		peers:                    peers,
 		persister:                persister,
 		me:                       me,
