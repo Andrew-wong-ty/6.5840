@@ -13,21 +13,23 @@ import (
 type logTopic string
 
 const (
-	dJoin    logTopic = "JOIN"
-	dLeave            = "LEAVE"
-	dMove             = "MOVE"
-	dQuery            = "QUERY"
-	dApply            = "APPLY"
-	dSnap             = "SNAP"
-	dPollCfg          = "POLL"
-	dGet              = "GET"
-	dPut              = "PUT"
-	dAppend           = "APPEND"
-	dClient           = "CLNT"
-	dCheck            = "CHECK"
-	dSend             = "SEND"
-	dReceive          = "RECEIVE"
-	dMigrate          = "MIGRATE"
+	dJoin         logTopic = "JOIN"
+	dLeave                 = "LEAVE"
+	dMove                  = "MOVE"
+	dQuery                 = "QUERY"
+	dApply                 = "APPLY"
+	dSnap                  = "SNAP"
+	dPollCfg               = "POLL"
+	dGet                   = "GET"
+	dPut                   = "PUT"
+	dAppend                = "APPEND"
+	dClient                = "CLNT"
+	dCheck                 = "CHECK"
+	dSend                  = "SEND"
+	dReceive               = "RECEIVE"
+	dMigrate               = "MIGRATE"
+	dMark                  = "MARK_NOT_READY"
+	dInstallShard          = "INSTALL_SHARD"
 )
 
 var debugStart time.Time
@@ -60,7 +62,7 @@ func DebugLog(topic logTopic, kv *ShardKV, format string, a ...interface{}) {
 		currTime /= 100
 		prefix := fmt.Sprintf("%06d %v ", currTime, string(topic))
 		if kv != nil {
-			prefix = prefix + fmt.Sprintf("S%v ", kv.me) + fmt.Sprintf("GID:%v ", kv.gid)
+			prefix = prefix + fmt.Sprintf("S%v ", kv.me) + fmt.Sprintf("GID:%v ", kv.gid) + fmt.Sprintf("[%v] ", topic)
 		}
 		format = prefix + format
 		log.Printf(format, a...)

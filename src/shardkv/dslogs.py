@@ -41,6 +41,8 @@ TOPICS = {
     "SEND": "#fe2626",
     "RECEIVE": "#fe2626",
     "MIGRATE": "#fe2626",
+    "MARK_NOT_READY": "#fe2626",
+    "INSTALL_SHARD": "#fe2626",
 }
 # fmt: on
 

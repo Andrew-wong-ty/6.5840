@@ -3,12 +3,27 @@ package shardkv
 import (
 	"6.5840/labrpc"
 	"6.5840/shardctrler"
+	"fmt"
 	"sync/atomic"
 	"time"
 )
 import "6.5840/raft"
 import "sync"
 import "6.5840/labgob"
+
+const requestTimeOut = 500 * time.Millisecond
+
+type Shard struct {
+	Version int               // determined by Config.Num
+	Data    map[string]string //! can be nil?
+}
+
+func MakeSubDB(version int) Shard {
+	return Shard{
+		Version: version,
+		Data:    make(map[string]string),
+	}
+}
 
 type ShardKV struct {
 	mu           sync.Mutex // protects the followings till cfgMutex
@@ -21,17 +36,31 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	persister           *raft.Persister
-	dead                int32
-	scc                 *shardctrler.Clerk // shard controller clerk. TODO: use for what?
-	lastApplied         int                // the index of latest applied log
-	inMemoryDB          map[string]string  // the DB that stores the correspondent shards in the replica group
-	clientId2SerialNum  map[int64]uint64   // to prevent duplicate requests
-	opDoneChans         map[int]chan Op    // used for notify an Op is done
-	cfgMutex            sync.Mutex         // protects the latest shardctrler.Config
-	latestCfg           shardctrler.Config // the latest shardctrler.Config; the server polls shardctrler for it periodically
-	cfgPollingTicker    *time.Ticker       // periodically send request to poll latest Config
-	cfgPollingTimeoutMS int64              // config polling timeout
+	persister          *raft.Persister
+	dead               int32
+	scc                *shardctrler.Clerk         // shard controller clerk. TODO: use for what?
+	lastApplied        int                        // the index of latest applied log
+	inMemoryDB         [shardctrler.NShards]Shard // shardId -> DB
+	clientId2SerialNum map[int64]uint64           // to prevent duplicate requests
+	opDoneChans        map[int]chan Op            // used for notify an Op is done
+	currCfg            shardctrler.Config         // the latest shardctrler.Config; the server polls shardctrler for it periodically
+	prevCfg            shardctrler.Config         // the previous config
+
+	cfgPollingTicker    *time.Ticker // periodically send request to poll latest Config
+	cfgPollingTimeoutMS int64        // config polling timeout
+	//reconfigChan        chan reconfigMsg // buffered chan, to notify the process of reconfiguration
+
+	// no lock is needed
+	clientId  int64  // when calling InstallShardData RPC, this machine is a client
+	serialNum uint64 // ! nock lock; the InstallShardData RPC call's serialNum
+}
+
+func db2str(db [shardctrler.NShards]Shard) string {
+	res := " "
+	for shardId, subDB := range db {
+		res += fmt.Sprintf("S%vV%vL%v; ", shardId, subDB.Version, len(subDB.Data))
+	}
+	return res
 }
 
 func (kv *ShardKV) deleteKeyFromOpDoneChans(cmdIdx int) {
@@ -45,32 +74,6 @@ func (kv *ShardKV) isCfgResponsibleForKey(cfg shardctrler.Config, key string) bo
 	sid := key2shard(key)
 	expectGID := cfg.Shards[sid]
 	return kv.gid == expectGID
-}
-
-// do some common checks before do Get/Put/Append
-func (kv *ShardKV) doCommonChecks(key string) (bool, Err) {
-	// check killed
-	if kv.killed() {
-		return false, ErrWrongLeader
-	}
-	// check leader
-	if _, isLeader := kv.rf.GetState(); !isLeader {
-		return false, ErrWrongLeader
-	}
-	kv.cfgMutex.Lock()
-	defer kv.cfgMutex.Unlock()
-	cfg := kv.latestCfg
-	// check if cfg is ready
-	if cfg.Num == 0 {
-		return false, ErrConfigNotReady
-	}
-	// check if the server's replica group is responsible for this key.
-	// TODO should I do this check here?
-	if !kv.isCfgResponsibleForKey(cfg, key) {
-		return false, ErrWrongGroup
-	}
-
-	return true, OK
 }
 
 // Kill is called by the tester when a ShardKV instance won't
@@ -122,6 +125,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(shardctrler.Config{})
+	labgob.Register(Shard{})
+	labgob.Register(Err(""))
 
 	kv := new(ShardKV)
 	//! Initializations
@@ -138,17 +144,46 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.dead = 0
 	kv.scc = shardctrler.MakeClerk(kv.ctrlers) // TODO: the shardctrler is used for what here?
 	kv.lastApplied = 0
-	kv.inMemoryDB = make(map[string]string)
 	kv.clientId2SerialNum = make(map[int64]uint64)
 	kv.opDoneChans = make(map[int]chan Op)
-	kv.cfgMutex = sync.Mutex{}
-	kv.latestCfg = shardctrler.Config{}
+	kv.currCfg = shardctrler.Config{}
+	kv.prevCfg = shardctrler.Config{}
 	kv.cfgPollingTimeoutMS = 100
 	kv.cfgPollingTicker = time.NewTicker(time.Duration(kv.cfgPollingTimeoutMS) * time.Millisecond)
+	//kv.reconfigChan = make(chan reconfigMsg, 16)
+
+	kv.clientId = nrand()
+	kv.serialNum = 0
 	//! Actions
-	// start a goroutine to fetch the first config
-	//go kv.updateConfig()
+	// init the DB
+	for i := 0; i < shardctrler.NShards; i++ {
+		kv.inMemoryDB[i] = MakeSubDB(0)
+	}
+	// read snapshot from persister (after the machine restart)
+	snapshot := persister.ReadSnapshot()
+	if snapshot != nil && len(snapshot) > 0 {
+		clt2SerialNum, db, currCfg, prevCfg := kv.decodeSnapshot(snapshot)
+		kv.clientId2SerialNum = clt2SerialNum
+		kv.inMemoryDB = db
+		kv.currCfg = currCfg
+		kv.prevCfg = prevCfg
+		DebugLog(dSnap, kv, "snapshot installed when server up, currCfg.Num=%v db=%v", currCfg.Num, db2str(kv.inMemoryDB))
+	}
 	go kv.ticker()
 	go kv.applier()
+	//go kv.reconfigHandler()
+	// debug only
+	//go kv.dbgDetectMuDeadLock()
+	//go kv.dbgDetecCfgMutexDeadLock()
+	DebugLog(dCheck, kv, "server started!")
 	return kv
+}
+
+func (kv *ShardKV) dbgDetectMuDeadLock() {
+	for {
+		kv.mu.Lock()
+		DebugLog(dCheck, kv, "kv.mu healthy")
+		kv.mu.Unlock()
+		time.Sleep(500 * time.Millisecond)
+	}
 }

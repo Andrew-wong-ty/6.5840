@@ -13,15 +13,20 @@ const (
 	OK                 = "OK"
 	ErrNoKey           = "ErrNoKey"
 	ErrWrongGroup      = "ErrWrongGroup"
+	ErrShardNotReady   = "ErrShardNotReady"
 	ErrWrongLeader     = "ErrWrongLeader"
 	ErrRepeatedRequest = "ErrRepeatedRequest"
 	ErrConfigNotReady  = "ErrConfigNotReady"
+	ErrOutdatedConfig  = "ErrOutdatedConfig"
 )
 
 const (
-	GET    = "GET"
-	PUT    = "PUT"
-	APPEND = "APPEND"
+	GET          = "GET"
+	PUT          = "PUT"
+	APPEND       = "APPEND"
+	INSTALLSHARD = "INSTALLSHARD"
+	UPDATECONFIG = "UPDATECONFIG"
+	DELETESHARD  = "DELETESHARD"
 )
 
 type Err string
