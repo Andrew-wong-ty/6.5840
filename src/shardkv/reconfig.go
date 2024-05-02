@@ -48,11 +48,12 @@ func (kv *ShardKV) sendRemovedShards(gid2UnsentShards map[int][]int) {
 		}
 		// send install shard RPC
 		args := InstallShardArgs{
-			ToGid:    gid,
-			Data:     encodeDB(shardDB),
-			ShardIDs: encodeSlice(shardIDs),
-			CfgNum:   kv.currCfg.Num,
-			ClientID: kv.clientId,
+			ToGid:            gid,
+			Data:             encodeDB(shardDB),
+			ShardIDs:         encodeSlice(shardIDs),
+			Client2SerialNum: encodeMap(kv.clientId2SerialNum),
+			CfgNum:           kv.currCfg.Num,
+			ClientID:         kv.clientId,
 		}
 		go func() {
 			DebugLog(dMigrate, kv, "sending shardData, cfgUsed=%v, toGid=%v, shardIDs=%v, data=%v", currCfg.String(), args.ToGid, decodeSlice(args.ShardIDs), shardDB)

@@ -9,6 +9,33 @@ import (
 	"fmt"
 )
 
+// encodeMap takes a map[int64]uint64 and returns a base64 encoded string.
+func encodeMap(data map[int64]uint64) string {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(data)
+	if err != nil {
+		panic(fmt.Sprintf("gob encode error, data=%v", data))
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+// decodeMap takes a base64 string and decodes it back into a map[int64]uint64.
+func decodeMap(encodedStr string) map[int64]uint64 {
+	var data map[int64]uint64
+	decodedBytes, err := base64.StdEncoding.DecodeString(encodedStr)
+	if err != nil {
+		panic("base64 decode error")
+	}
+	buf := bytes.NewBuffer(decodedBytes)
+	dec := gob.NewDecoder(buf)
+	err = dec.Decode(&data)
+	if err != nil {
+		panic("gob decode error")
+	}
+	return data
+}
+
 // encodeConfig takes a Config object by value and returns a base64 encoded string.
 func encodeConfig(cfg shardctrler.Config) string {
 	var buf bytes.Buffer

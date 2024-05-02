@@ -38,6 +38,7 @@ func (kv *ShardKV) applier() {
 				}
 				kv.lastApplied = msg.CommandIndex
 
+				// TODO: refactor
 				// check if op is repeated/outdated
 				if op.OpType != GET && op.OpType != INSTALLSHARD { // GET and INSTALLSHARD (only update new shards) are idempotent
 					if op.SerialNum <= kv.clientId2SerialNum[op.ClientId] {
@@ -45,15 +46,14 @@ func (kv *ShardKV) applier() {
 						kv.mu.Unlock()
 						continue
 					}
-					kv.clientId2SerialNum[op.ClientId] = op.SerialNum
 				}
 
 				if op.OpType == UPDATECONFIG {
 					// update curr and prev config
-					op.Error = kv.doUpdateConfig(op.NewConfig) // todo: pass &op
+					op.Error = kv.doUpdateConfig(op.NewConfig) // TODO: refactor to pass op pointer
 				} else if op.OpType == INSTALLSHARD {
 					// put migrated shards into currDB
-					op.Error, op.InstalledSuccessShards = kv.doInstallShard(op.ShardData, op.ShardIDs, op.ShardDataVersion)
+					op.Error, op.InstalledSuccessShards = kv.doInstallShard(op.ShardData, op.ShardIDs, op.ShardDataVersion, op.Client2SerialNum)
 				} else if op.OpType == DELETESHARD {
 					op.Error = kv.doDeleteShard(op.ShardIDs, op.Version)
 				} else {
@@ -84,6 +84,17 @@ func (kv *ShardKV) applier() {
 						op.Error = ErrWrongGroup
 					}
 
+				}
+				// TODO: refactor this
+				if op.OpType != GET && op.OpType != INSTALLSHARD {
+					if op.OpType == PUT || op.OpType == APPEND { // for put and append, only update serialNum after it is executed
+						if op.Error == OK {
+							kv.clientId2SerialNum[op.ClientId] = op.SerialNum
+						}
+					} else {
+						// INSTALLSHARD /  internal=>  UPDATECONFIG  DELETESHARD
+						kv.clientId2SerialNum[op.ClientId] = op.SerialNum
+					}
 				}
 				// notify Get/PutAppend function that this operation is done, and send results by op
 				opDoneChan := kv.getOpDoneChan(msg.CommandIndex)
@@ -131,7 +142,7 @@ func (kv *ShardKV) doPut(key, value string) Err {
 func (kv *ShardKV) doAppend(key, value string) Err {
 	sid := key2shard(key)
 	kv.inMemoryDB[sid].Data[key] += value
-	DebugLog(dAppend, kv, "append %v -> %v => %v applied", key, value, kv.inMemoryDB[sid].Data[key])
+	DebugLog(dAppend, kv, "append %v -> += %v => %v applied", key, value, kv.inMemoryDB[sid].Data[key])
 	return OK
 }
 
@@ -190,11 +201,12 @@ func (kv *ShardKV) doUpdateConfig(serializedCfg string) Err {
 // ! should be in lock context (kv.mu)
 // Install the shardData; it first checks if the data is outdated (smaller version)
 // if data is outdated, reject install and return OK; else install and update DB's shard data's version
-func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs string, version int) (Err, string) {
+func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs string, version int, client2Seq string) (Err, string) {
 	shardDatas := decodeDB(serializedData)      // shardData
 	shardIDs := decodeSlice(serializedShardIDs) // shardIDs to be installed
 	successInstalledShardIDs := make([]int, 0)  // what shards are installed finally
-
+	clientId2SerialNum := decodeMap(client2Seq)
+	// install the new shards, ignore the outdated ones.
 	for _, shardId := range shardIDs {
 		shardData := shardDatas[shardId]
 		if version > kv.inMemoryDB[shardId].Version { // only install the new ones
@@ -204,6 +216,25 @@ func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs stri
 			kv.inMemoryDB[shardId].Data = shardData
 		}
 		// reject install a smaller-version shard data
+	}
+	/*
+		To prevent the same put/append request to be applied twice
+		For example, client send Append(Key="1", val="2") to 101, suppose ErrTimeout happens and the PutAppend RPC returns.
+		Suppose later this Append applied (now in the DB, key"1"="2"). After PutAppend RPC returns, the client send Append again.
+		Suppose now reconfig happens, group 102 is responsible for this key.
+		Next, the client request for 101 group for Append(Key="1", val="2") but get rejected by ErrWrongGroup.
+		Then client queries the latest config and retires, which sends  Append(Key="1", val="2") to 102.  (Suppose group 101 has migrated the shard contains `key"1"="2"` to 102 before this request.)
+		In the PutAppend RPC on group 102, suppose the SerialNum check pass, and finally Append(Key="1", val="2") is applied on 102.
+		At this time key"1"="22" in DB.
+
+		So in this case, Append(Key="1", val="2") is applied twice, which is buggy in the same client Append request.
+		Therefore, copying the clientId2SerialNum from 101 to 102 when shard migrate can solve it.
+	*/
+
+	for clientId, seqId := range clientId2SerialNum {
+		if r, ok := kv.clientId2SerialNum[clientId]; !ok || r < seqId {
+			kv.clientId2SerialNum[clientId] = seqId
+		}
 	}
 	DebugLog(dReceive, kv, "version=%v, install shards: %v; data=%v; success: %v; DB=%v applied",
 		version, shardIDs, shardDatas, successInstalledShardIDs, db2str(kv.inMemoryDB))

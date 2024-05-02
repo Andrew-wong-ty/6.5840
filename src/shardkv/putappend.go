@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -10,7 +11,6 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	DebugLog(dPut, kv, "%v, key=%v (shard=%v) v=%v try to started", args.Op, args.Key, key2shard(args.Key), args.Value)
 	// check leader
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
@@ -46,17 +46,21 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	commandIdx, _, _ := kv.rf.Start(op)
 	opDoneChan := kv.getOpDoneChan(commandIdx)
 	kv.mu.Unlock()
-
+	DebugLog(dPut, kv, "%v, key=%v (shard=%v) v=%v  started", args.Op, args.Key, key2shard(args.Key), args.Value)
 	// wait until response
 	timer := time.NewTimer(requestTimeOut)
 	select {
 	case msg := <-opDoneChan:
 		if msg.ClientId == args.ClientID && msg.SerialNum == args.SerialNum && msg.OpType == args.Op {
+			go kv.deleteKeyFromOpDoneChans(commandIdx)
 			reply.Err = msg.Error
 		} else {
+			fmt.Println("Wrong ID")
+			//DebugLog(dCheck, kv, "Wrong ID")
 			reply.Err = ErrWrongLeader
 		}
 	case <-timer.C:
+		reply.Err = ErrTimeout
 		DebugLog(dPut, kv, "%v, key=%v (shard=%v) timeout", op.OpType, op.Key, key2shard(op.Key))
 	}
 }

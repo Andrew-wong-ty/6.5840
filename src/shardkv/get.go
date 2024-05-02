@@ -29,11 +29,11 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	// check serial number
-	if args.SerialNum <= kv.clientId2SerialNum[args.ClientID] {
-		reply.Err = ErrRepeatedRequest
-		kv.mu.Unlock()
-		return
-	}
+	//if args.SerialNum <= kv.clientId2SerialNum[args.ClientID] {
+	//	reply.Err = ErrRepeatedRequest
+	//	kv.mu.Unlock()
+	//	return
+	//}
 	// start agreement
 	op := Op{
 		Key:       args.Key,
@@ -55,6 +55,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			reply.Err = ErrWrongLeader
 		}
 	case <-timer.C:
+		reply.Err = ErrTimeout
 		DebugLog(dGet, kv, "get key=%v (shard=%v) timeout", op.Key, key2shard(op.Key))
 	}
 }

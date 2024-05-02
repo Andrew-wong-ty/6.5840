@@ -7,11 +7,12 @@ import (
 )
 
 type InstallShardArgs struct {
-	ToGid    int    // receiver's GID
-	Data     string // serialized (gob+base64) shard data of type [NShard]map[string][string]
-	ShardIDs string // the shard IDs to be installed; serialized (gob + base64)
-	ClientID int64
-	CfgNum   int // = currCfg.Num
+	ToGid            int    // receiver's GID
+	Data             string // serialized (gob+base64) shard data of type [NShard]map[string][string]
+	ShardIDs         string // the shard IDs to be installed; serialized (gob + base64)
+	ClientID         int64
+	Client2SerialNum string
+	CfgNum           int // = currCfg.Num
 }
 
 type InstallShardReply struct {
@@ -27,7 +28,7 @@ func (kv *ShardKV) sendInstallShardData(cfg shardctrler.Config, args *InstallSha
 		for sid := 0; ; sid++ {
 			sid = sid % len(serverNames)
 			if nTry != 0 && nTry%len(serverNames) == 0 {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(retryInterval)
 			}
 
 			srv := kv.make_end(serverNames[sid])
@@ -35,9 +36,6 @@ func (kv *ShardKV) sendInstallShardData(cfg shardctrler.Config, args *InstallSha
 			ok := srv.Call("ShardKV.InstallShardData", args, &reply)
 			if ok && (reply.ErrMsg == OK) {
 				return true, reply.InstalledSuccessShards
-			}
-			if ok && (reply.ErrMsg == ErrRepeatedRequest) { // the installShard agreement has been made on target server
-				return false, reply.InstalledSuccessShards
 			}
 
 			nTry++
@@ -65,16 +63,12 @@ func (kv *ShardKV) InstallShardData(args *InstallShardArgs, reply *InstallShardR
 		return
 	}
 	kv.mu.Lock()
-	if uint64(args.CfgNum) <= kv.clientId2SerialNum[args.ClientID] {
-		reply.ErrMsg = ErrRepeatedRequest
-		kv.mu.Unlock()
-		return
-	}
 	op := Op{
 		OpType:           INSTALLSHARD,
 		ShardData:        args.Data,
 		ShardIDs:         args.ShardIDs,
 		ShardDataVersion: args.CfgNum,
+		Client2SerialNum: args.Client2SerialNum,
 		ClientId:         args.ClientID,
 		SerialNum:        uint64(args.CfgNum),
 	}

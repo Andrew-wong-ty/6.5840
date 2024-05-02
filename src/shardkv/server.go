@@ -11,7 +11,7 @@ import "6.5840/raft"
 import "sync"
 import "6.5840/labgob"
 
-const requestTimeOut = 500 * time.Millisecond
+const requestTimeOut = 1 * time.Second
 
 type Shard struct {
 	Version int               // determined by Config.Num

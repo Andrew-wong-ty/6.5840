@@ -10,13 +10,14 @@ package shardkv
 
 import (
 	"6.5840/labrpc"
-	"fmt"
 	"sync"
 )
 import "crypto/rand"
 import "math/big"
 import "6.5840/shardctrler"
 import "time"
+
+const retryInterval = 300 * time.Millisecond
 
 // which shard is a key in?
 // please use this function,
@@ -74,29 +75,17 @@ func (ck *Clerk) Get(key string) string {
 				}
 				//log.Printf("err=%v ", reply.Err)
 				if ok && (reply.Err == ErrWrongGroup) {
-					// increment serialNum and retry
-					ck.mutex.Lock()
-					ck.serialNum++
-					args.SerialNum = ck.serialNum
-					ck.mutex.Unlock()
 					break
 				}
 				if ok && (reply.Err == ErrShardNotReady) {
-					// increment serialNum and retry
-					ck.mutex.Lock()
-					ck.serialNum++
-					args.SerialNum = ck.serialNum
-					ck.mutex.Unlock()
 					break
 				}
 				// ... not ok, or ErrWrongLeader
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(retryInterval)
 		// ask controller for the latest configuration.
-		//log.Printf("query cfg init ")
 		ck.config = ck.sm.Query(-1)
-		//log.Printf("query cfg done ")
 	}
 
 	return ""
@@ -134,27 +123,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 					break
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
-					// increment serialNum and retry
-					ck.mutex.Lock()
-					ck.serialNum++
-					args.SerialNum = ck.serialNum
-					ck.mutex.Unlock()
 					break
 				}
 				if ok && (reply.Err == ErrShardNotReady) {
-					// increment serialNum and retry
-					fmt.Printf("key=%v not ready, retry\n", args.Key)
-					ck.mutex.Lock()
-					ck.serialNum++
-					args.SerialNum = ck.serialNum
-					ck.mutex.Unlock()
 					break
 				}
 				// ... not ok, or ErrWrongLeader
 			}
 		}
-		time.Sleep(300 * time.Millisecond)
-		//fmt.Printf("ntry=%v\n", nTry)
+		time.Sleep(retryInterval)
 		// ask controller for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}

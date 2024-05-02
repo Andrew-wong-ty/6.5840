@@ -19,6 +19,7 @@ type Op struct {
 	NewConfig              string // for UPDATECONFIG; the new config (gob+base64)
 	SerialNum              uint64 // client request's serial number
 	ClientId               int64
+	Client2SerialNum       string
 	Error                  Err
 }
 

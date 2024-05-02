@@ -18,6 +18,7 @@ const (
 	ErrRepeatedRequest = "ErrRepeatedRequest"
 	ErrConfigNotReady  = "ErrConfigNotReady"
 	ErrOutdatedConfig  = "ErrOutdatedConfig"
+	ErrTimeout         = "ErrTimeout"
 )
 
 const (
