@@ -10,6 +10,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
+	DebugLog(dPut, kv, "%v, key=%v (shard=%v) v=%v try to started", args.Op, args.Key, key2shard(args.Key), args.Value)
 	// check leader
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
@@ -45,7 +46,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	commandIdx, _, _ := kv.rf.Start(op)
 	opDoneChan := kv.getOpDoneChan(commandIdx)
 	kv.mu.Unlock()
-	DebugLog(dPut, kv, "%v, key=%v (shard=%v) started", op.OpType, op.Key, key2shard(op.Key))
+
 	// wait until response
 	timer := time.NewTimer(requestTimeOut)
 	select {

@@ -1,6 +1,10 @@
 package shardkv
 
-import "6.5840/porcupine"
+import (
+
+"6.5840/porcupine"
+"log"
+)
 import "6.5840/models"
 import "testing"
 import "strconv"
@@ -22,7 +26,7 @@ func check(t *testing.T, ck *Clerk, key string, value string) {
 
 // test static 2-way sharding, without shard movement.
 func TestStaticShards(t *testing.T) {
-	fmt.Printf("Test: static shards ...\n")
+	log.Printf("Test: static shards ...\n")
 
 	cfg := make_config(t, 3, false, -1)
 	defer cfg.cleanup()
@@ -99,8 +103,8 @@ func TestJoinLeave(t *testing.T) {
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
-
 	cfg.join(0)
+	fmt.Printf("018475 GET S0 GID:1  -------  join 0 done -------  \n")
 
 	n := 10
 	ka := make([]string, n)
@@ -110,11 +114,14 @@ func TestJoinLeave(t *testing.T) {
 		va[i] = randstring(5)
 		ck.Put(ka[i], va[i])
 	}
+	fmt.Printf("018475 GET S0 GID:2  -------  put 10 done -------  \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	fmt.Printf("018475 GET S0 GID:3  -------  check 10 done -------  \n")
 
 	cfg.join(1)
+	fmt.Printf("018475 GET S0 GID:4  -------  joint 1 done -------  \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -122,8 +129,10 @@ func TestJoinLeave(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("018475 GET S0 GID:5  -------  append 10 done -------  \n")
 
 	cfg.leave(0)
+	fmt.Printf("018475 GET S0 GID:6  -------  leave 0 done -------  \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -131,6 +140,7 @@ func TestJoinLeave(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("018475 GET S0 GID:7  -------  append 10 done -------  \n")
 
 	// allow time for shards to transfer.
 	time.Sleep(1 * time.Second)
@@ -141,6 +151,7 @@ func TestJoinLeave(t *testing.T) {
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	fmt.Printf("018475 GET S0 GID:7  -------  shutdown 0 + check done -------  \n")
 
 	fmt.Printf("  ... Passed\n")
 }
@@ -163,13 +174,15 @@ func TestSnapshot(t *testing.T) {
 		va[i] = randstring(20)
 		ck.Put(ka[i], va[i])
 	}
+	log.Println("30 put done")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
-
+	log.Println("30 put's check done")
 	cfg.join(1)
 	cfg.join(2)
 	cfg.leave(0)
+	log.Println("join join leave done")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -177,9 +190,11 @@ func TestSnapshot(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
-
+	log.Println("re-config's check done")
 	cfg.leave(1)
+	log.Println("leave <- join done")
 	cfg.join(0)
+	log.Println("leave join <- done")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -187,12 +202,14 @@ func TestSnapshot(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	log.Println("append done")
 
 	time.Sleep(1 * time.Second)
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	log.Println("append's check done")
 
 	time.Sleep(1 * time.Second)
 
@@ -201,14 +218,18 @@ func TestSnapshot(t *testing.T) {
 	cfg.ShutdownGroup(0)
 	cfg.ShutdownGroup(1)
 	cfg.ShutdownGroup(2)
+	log.Println("all shutdown done")
 
 	cfg.StartGroup(0)
 	cfg.StartGroup(1)
 	cfg.StartGroup(2)
+	log.Println("all start done")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
+		log.Printf("final check key=%v done\n", ka[i])
 	}
+	log.Println("final check done")
 
 	fmt.Printf("  ... Passed\n")
 }
@@ -222,6 +243,7 @@ func TestMissChange(t *testing.T) {
 	ck := cfg.makeClient()
 
 	cfg.join(0)
+	fmt.Printf("018475 GET S0 GID:999  -----  join 0 done -----  \n")
 
 	n := 10
 	ka := make([]string, n)
@@ -231,28 +253,37 @@ func TestMissChange(t *testing.T) {
 		va[i] = randstring(20)
 		ck.Put(ka[i], va[i])
 	}
+	fmt.Printf("018475 GET S0 GID:1  -----  put 10 keys done -----  \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	fmt.Printf("018475 GET S0 GID:2  -----  check 10 keys done -----  \n")
 
 	cfg.join(1)
+	fmt.Printf("018475 GET S0 GID:3  -----  join 1 done -----  \n")
 
 	cfg.ShutdownServer(0, 0)
 	cfg.ShutdownServer(1, 0)
 	cfg.ShutdownServer(2, 0)
+	fmt.Printf("018475 GET S0 GID:4  -----  Shutdown all group's Server 0 done -----  \n")
 
 	cfg.join(2)
+	fmt.Printf("018475 GET S0 GID:5  -----  join 2 done -----  \n")
 	cfg.leave(1)
+	fmt.Printf("018475 GET S0 GID:6  -----  leave 1 done -----  \n")
 	cfg.leave(0)
+	fmt.Printf("018475 GET S0 GID:7  -----  leave 0 done -----  \n")
 
 	for i := 0; i < n; i++ {
-		check(t, ck, ka[i], va[i])
+		check(t, ck, ka[i], va[i]) //! HERE BUG!
 		x := randstring(20)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("018475 GET S0 GID:8  -----  append 10 done -----  \n")
 
 	cfg.join(1)
+	fmt.Printf("018475 GET S0 GID:9  -----  join 1 done -----  \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -260,10 +291,12 @@ func TestMissChange(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("018475 GET S0 GID:10  -----  append 10 done -----  \n")
 
 	cfg.StartServer(0, 0)
 	cfg.StartServer(1, 0)
 	cfg.StartServer(2, 0)
+	fmt.Printf("018475 GET S0 GID:11  -----  start all server 0 done -----  \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -271,30 +304,37 @@ func TestMissChange(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	fmt.Printf("018475 GET S0 GID:12  -----   append 10 done -----  \n")
 
 	time.Sleep(2 * time.Second)
 
 	cfg.ShutdownServer(0, 1)
 	cfg.ShutdownServer(1, 1)
 	cfg.ShutdownServer(2, 1)
+	fmt.Printf("018475 GET S0 GID:13  -----   Shutdown all server 1 done -----  \n")
 
 	cfg.join(0)
+	fmt.Printf("018475 GET S0 GID:14  -----   join 0 done -----  \n")
 	cfg.leave(2)
+	fmt.Printf("018475 GET S0 GID:15  -----   leave 2 done -----  \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
-		ck.Append(ka[i], x)
+		ck.Append(ka[i], x) //! stuck here!
 		va[i] += x
 	}
+	fmt.Printf("018475 GET S0 GID:16  -----   append 10 done -----  \n")
 
 	cfg.StartServer(0, 1)
 	cfg.StartServer(1, 1)
 	cfg.StartServer(2, 1)
+	fmt.Printf("018475 GET S0 GID:17  -----   start all server 1 done -----  \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	fmt.Printf("018475 GET S0 GID:17  -----   final check 10 done -----  \n")
 
 	fmt.Printf("  ... Passed\n")
 }
@@ -458,7 +498,7 @@ func TestConcurrent3(t *testing.T) {
 	ck := cfg.makeClient()
 
 	cfg.join(0)
-
+	fmt.Printf("018475 GET S0 GID:0  -----   join 0 done -----  \n")
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
@@ -467,7 +507,7 @@ func TestConcurrent3(t *testing.T) {
 		va[i] = randstring(1)
 		ck.Put(ka[i], va[i])
 	}
-
+	fmt.Printf("018475 GET S0 GID:1  -----   put 10 done -----  \n")
 	var done int32
 	ch := make(chan bool)
 
@@ -478,12 +518,14 @@ func TestConcurrent3(t *testing.T) {
 			ck1.Append(ka[i], x)
 			va[i] += x
 		}
+		fmt.Printf("018475 GET S0 GID:999  -----   many many append done -----  \n")
 	}
 
 	for i := 0; i < n; i++ {
 		ck1 := cfg.makeClient()
 		go ff(i, ck1)
 	}
+	fmt.Printf("018475 GET S0 GID:2  -----   started many many append -----  \n")
 
 	t0 := time.Now()
 	for time.Since(t0) < 12*time.Second {
@@ -502,18 +544,21 @@ func TestConcurrent3(t *testing.T) {
 		cfg.leave(2)
 		time.Sleep(time.Duration(rand.Int()%900) * time.Millisecond)
 	}
+	fmt.Printf("018475 GET S0 GID:3  -----   12 second's mang join and leave done -----  \n")
 
 	time.Sleep(2 * time.Second)
 
 	atomic.StoreInt32(&done, 1)
+	fmt.Printf("018475 GET S0 GID:4  -----  sleep 2 sec done -----  \n")
 	for i := 0; i < n; i++ {
 		<-ch
+		fmt.Printf("018475 GET S0 GID:999  -----  chan %v received -----  \n", i)
 	}
-
+	fmt.Printf("018475 GET S0 GID:5  -----  send chan done -----  \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
-
+	fmt.Printf("018475 GET S0 GID:999  -----  final check done -----  \n")
 	fmt.Printf("  ... Passed\n")
 }
 

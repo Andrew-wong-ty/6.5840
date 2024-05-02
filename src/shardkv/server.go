@@ -36,29 +36,27 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	persister          *raft.Persister
-	dead               int32
-	scc                *shardctrler.Clerk         // shard controller clerk. TODO: use for what?
-	lastApplied        int                        // the index of latest applied log
-	inMemoryDB         [shardctrler.NShards]Shard // shardId -> DB
+	persister   *raft.Persister
+	dead        int32
+	scc         *shardctrler.Clerk // shard controller clerk. TODO: use for what?
+	opDoneChans map[int]chan Op    // used for notify an Op is done
+	// persist
+
 	clientId2SerialNum map[int64]uint64           // to prevent duplicate requests
-	opDoneChans        map[int]chan Op            // used for notify an Op is done
+	inMemoryDB         [shardctrler.NShards]Shard // shardId -> DB
 	currCfg            shardctrler.Config         // the latest shardctrler.Config; the server polls shardctrler for it periodically
 	prevCfg            shardctrler.Config         // the previous config
+	clientId           int64                      // when calling InstallShardData RPC, this machine is a client
+	lastApplied        int                        // the index of latest applied log
 
 	cfgPollingTicker    *time.Ticker // periodically send request to poll latest Config
 	cfgPollingTimeoutMS int64        // config polling timeout
-	//reconfigChan        chan reconfigMsg // buffered chan, to notify the process of reconfiguration
-
-	// no lock is needed
-	clientId  int64  // when calling InstallShardData RPC, this machine is a client
-	serialNum uint64 // ! nock lock; the InstallShardData RPC call's serialNum
 }
 
 func db2str(db [shardctrler.NShards]Shard) string {
 	res := " "
 	for shardId, subDB := range db {
-		res += fmt.Sprintf("S%vV%vL%v; ", shardId, subDB.Version, len(subDB.Data))
+		res += fmt.Sprintf("%vv%vl%v; ", shardId, subDB.Version, len(subDB.Data))
 	}
 	return res
 }
@@ -153,7 +151,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	//kv.reconfigChan = make(chan reconfigMsg, 16)
 
 	kv.clientId = nrand()
-	kv.serialNum = 0
 	//! Actions
 	// init the DB
 	for i := 0; i < shardctrler.NShards; i++ {
@@ -162,11 +159,13 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// read snapshot from persister (after the machine restart)
 	snapshot := persister.ReadSnapshot()
 	if snapshot != nil && len(snapshot) > 0 {
-		clt2SerialNum, db, currCfg, prevCfg := kv.decodeSnapshot(snapshot)
+		clt2SerialNum, db, currCfg, prevCfg, clientId, lastApplied := kv.decodeSnapshot(snapshot)
 		kv.clientId2SerialNum = clt2SerialNum
 		kv.inMemoryDB = db
 		kv.currCfg = currCfg
 		kv.prevCfg = prevCfg
+		kv.clientId = clientId
+		kv.lastApplied = lastApplied
 		DebugLog(dSnap, kv, "snapshot installed when server up, currCfg.Num=%v db=%v", currCfg.Num, db2str(kv.inMemoryDB))
 	}
 	go kv.ticker()

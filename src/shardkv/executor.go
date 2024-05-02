@@ -9,7 +9,7 @@ import (
 // getOpDoneChan returns an op-done-notification-chan for a given commandIdx
 func (kv *ShardKV) getOpDoneChan(commandIdx int) chan Op {
 	if _, hasKey := kv.opDoneChans[commandIdx]; !hasKey {
-		kv.opDoneChans[commandIdx] = make(chan Op, 1) //! Note: must be unbuffered to avoid deadlock
+		kv.opDoneChans[commandIdx] = make(chan Op, 8) //! Note: must be unbuffered to avoid deadlock
 	}
 	return kv.opDoneChans[commandIdx]
 }
@@ -87,7 +87,7 @@ func (kv *ShardKV) applier() {
 				}
 				// notify Get/PutAppend function that this operation is done, and send results by op
 				opDoneChan := kv.getOpDoneChan(msg.CommandIndex)
-				opDoneChan <- op //! potential deadlock?
+				opDoneChan <- op //! potential deadlock!!!!!
 				// do snapshot
 				if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
 					go kv.rf.Snapshot(msg.CommandIndex, kv.encodeSnapshot())

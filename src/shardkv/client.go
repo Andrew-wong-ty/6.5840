@@ -114,7 +114,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	ck.serialNum++
 	args.SerialNum = ck.serialNum
 	ck.mutex.Unlock()
-
+	nTry := 0
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
@@ -123,8 +123,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				nTry++
 				if ok && reply.Err == OK {
 					return
+				}
+				if ok && reply.Err == ErrRepeatedRequest {
+					return // todo: prove
+				}
+				if ok && reply.Err == ErrConfigNotReady {
+					break
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
 					// increment serialNum and retry
@@ -146,7 +153,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				// ... not ok, or ErrWrongLeader
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
+		//fmt.Printf("ntry=%v\n", nTry)
 		// ask controller for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
