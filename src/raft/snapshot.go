@@ -1,7 +1,5 @@
 package raft
 
-import "fmt"
-
 /****************************************************  InstallSnapshot  *******************************************************/
 
 type InstallSnapshotArgs struct {
@@ -118,23 +116,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.snapshotLastIncludedTerm = args.LastIncludedTerm
 	rf.firstLogIdx = args.LastIncludedIndex + 1
 
-	DebugLog(dSnap, rf, "handle InstallSnapshot from%v; retain=%v, STATES: %v", args.LeaderId, flag6, rf.printAllIndicesAndTermsStates())
-
-	//if rf.getLastLogIndex() <= args.LastIncludedIndex { //discard all logs: the snapshot covers all its logs (and its current snapshot, if it has one)
-	//	rf.logs = make([]Log, 1)
-	//} else { // discard some of the logs
-	//	newFirstLogIdx := args.LastIncludedIndex + 1
-	//	newLogs := make([]Log, 1)
-	//	newLogs = append(newLogs, rf.logs[rf.logIdx2physicalIdx(newFirstLogIdx):]...)
-	//	rf.logs = newLogs
-	//}
-	//rf.snapshot = args.Data
-	//rf.snapshotLastIncludedIdx = args.LastIncludedIndex
-	//rf.snapshotLastIncludedTerm = args.LastIncludedTerm
-	//
-	//rf.firstLogIdx = args.LastIncludedIndex + 1
-	//rf.commitIndex = args.LastIncludedIndex
-	//rf.lastApplied = args.LastIncludedIndex
+	DebugLog(dSnap, rf, "handle InstallSnapshot from%v; retain=%v, STATES: %v", args.LeaderId, flag6, rf.PrintAllIndicesAndTermsStates())
 
 	msg := ApplyMsg{
 		SnapshotValid: true,
@@ -158,15 +140,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
 	//! Note: the log having the firstLogIdx is non exist; consider refactor name:  rf.firstLogIdx -> rf.expectedFirstLogIdx
-	if rf.firstLogIdx < index /*assure this log index could be found in rf.logs*/ {
+	if rf.firstLogIdx <= index /*assure this log index could be found in rf.logs*/ {
 		// snapshot parameters
 		newFirstLogIdx := index + 1
 		lastIncludedIdx := index
-		dbgIdx := rf.logIdx2physicalIdx(index)
-		if dbgIdx <= 0 || dbgIdx >= len(rf.logs) {
-			DebugLog(dError, rf, "snapshot invalid physical Idx: idx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
-			errMsg := fmt.Sprintf("error: invalid physical index, indx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
-			panic(errMsg)
+		physicalIdx := rf.logIdx2physicalIdx(index)
+		if physicalIdx <= 0 || physicalIdx >= len(rf.logs) {
+			return // the index may be too advanced. For example, 1stLogIndex = 98, index = 99, logLen = 2 (highest log index=98)
 		}
 		lastIncludedTerm := rf.logs[rf.logIdx2physicalIdx(index)].Term
 		// generate new logs
@@ -180,7 +160,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		rf.snapshot = snapshot
 		rf.snapshotLastIncludedIdx = lastIncludedIdx
 		rf.snapshotLastIncludedTerm = lastIncludedTerm
-		DebugLog(dSnap, rf, "snapshot called!! idx=%v, STATES: %v", index, rf.printAllIndicesAndTermsStates())
+		DebugLog(dSnap, rf, "snapshot called!! idx=%v, STATES: %v", index, rf.PrintAllIndicesAndTermsStates())
 		rf.persist()
 	} else {
 		DebugLog(dSnap, rf, "snapshot: invalid index")
@@ -216,7 +196,7 @@ func (rf *Raft) logIdx2physicalIdx(index int) int {
 	} else {
 		res := index - rf.firstLogIdx + 1
 		if res <= 0 || res >= len(rf.logs) {
-			DebugLog(dError, rf, "possible invalid physical Idx: idx=%v, STATES:%v", index, rf.printAllIndicesAndTermsStates())
+			DebugLog(dError, rf, "possible invalid physical Idx: idx=%v, STATES:%v", index, rf.PrintAllIndicesAndTermsStates())
 		}
 		return res
 	}
