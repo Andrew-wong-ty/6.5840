@@ -88,8 +88,12 @@ func (rf *Raft) logs2str(logs []Log) string {
 	return "[" + res + "]"
 }
 
-func (rf *Raft) printAllIndicesAndTermsStates() string {
-	res := fmt.Sprintf("T=%v, 1stLogIdx=%v, lastLogIdx=%v, logLen=%v, comittedIdx=%v, lastAppliedIdx=%v, SnapLastIncludeIdx=%v, SnapLastIncludeTerm=%v, ",
-		rf.currentTerm, rf.firstLogIdx, rf.getLastLogIndex(), len(rf.logs), rf.commitIndex, rf.lastApplied, rf.snapshotLastIncludedIdx, rf.snapshotLastIncludedTerm)
+func (rf *Raft) PrintAllIndicesAndTermsStates() string {
+	vf := -1
+	if rf.votedFor != nil {
+		vf = *rf.votedFor
+	}
+	res := fmt.Sprintf("T=%v, 1stLogIdx=%v, lastLogIdx=%v, logLen=%v, comittedIdx=%v, lastAppliedIdx=%v, SnapLastIncludeIdx=%v, SnapLastIncludeTerm=%v, role=%v, vf=%v",
+		rf.currentTerm, rf.firstLogIdx, rf.getLastLogIndex(), len(rf.logs), rf.commitIndex, rf.lastApplied, rf.snapshotLastIncludedIdx, rf.snapshotLastIncludedTerm, rf.state, vf)
 	return res
 }

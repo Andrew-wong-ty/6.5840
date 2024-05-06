@@ -83,6 +83,8 @@ type Raft struct {
 	snapshotLastIncludedTerm int                 // @Snapshot; the latest snapshot's lasted included log's term
 	heartbeatTimeout         int64               // send AppendEntries(heartbeat) to followers every heartbeatTimeout ms
 	electionTimeout          int64               // election timeout in millisecond
+	commitNoop               bool                // flush the uncommitted logs
+	dbgMsg                   string
 }
 
 // GetState return currentTerm and whether this server
@@ -103,6 +105,16 @@ func (rf *Raft) SetHeartbeatTimeout(newTimeoutMillisecond int64) {
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
 	rf.heartbeatTimeout = newTimeoutMillisecond
+}
+
+func (rf *Raft) SetCommitNoop(val bool) {
+	rf.mutex.Lock()
+	defer rf.mutex.Unlock()
+	rf.commitNoop = val
+}
+
+func (rf *Raft) SetDbgMsg(val string) {
+	rf.dbgMsg = val
 }
 
 // Start an agreement on the next Command to be appended to Raft's log.
@@ -199,6 +211,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		snapshotLastIncludedIdx:  -1,
 		heartbeatTimeout:         60, // should be  >=50 ms to pass tests
 		electionTimeout:          500,
+		commitNoop:               false,
 	}
 	rf.electionTimeoutTicker = time.NewTicker(time.Duration(rf.electionTimeout+(rand.Int63()%50)) * time.Millisecond)
 	rf.heartbeatTimeoutTicker = time.NewTicker(time.Duration(rf.heartbeatTimeout) * time.Millisecond)

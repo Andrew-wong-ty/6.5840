@@ -43,7 +43,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// Rule.All Servers.1
 	defer func() {
 		if rf.commitIndex > rf.lastApplied {
-			DebugLog(dInfo, rf, "notify myself apply logs, STATES: %v", rf.printAllIndicesAndTermsStates())
+			DebugLog(dInfo, rf, "notify myself apply logs, STATES: %v", rf.PrintAllIndicesAndTermsStates())
 			rf.applyCond.Signal() // notify apply logs
 		}
 	}()
@@ -142,7 +142,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIndex())
 	}
 	DebugLog(dClient, rf, "eid=%v, handle AppendEntries from %v Success= %v, log= %v, STATES: %v",
-		args.EventId, args.LeaderId, reply.Success, rf.logs2str(rf.logs), rf.printAllIndicesAndTermsStates())
+		args.EventId, args.LeaderId, reply.Success, rf.logs2str(rf.logs), rf.PrintAllIndicesAndTermsStates())
 
 }
 
@@ -197,11 +197,6 @@ func (rf *Raft) sendAppendEntriesToOnePeer(followerId, nextIdx int, args AppendE
 			DebugLog(dLeader, rf, "follower S%v's term is larger; be follower; refresh", followerId)
 			rf.currentTerm = reply.Term
 			rf.changeStateAndReinitialize(FOLLOWER) // leader -> follower
-			return
-		}
-
-		// since it sent heartbeat, just return and do not update anything,
-		if len(args.Entries) == 0 {
 			return
 		}
 

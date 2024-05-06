@@ -41,14 +41,16 @@ func (rf *Raft) changeStateAndReinitialize(role Role) {
 			rf.electionTimeoutTicker.Stop()
 			// reinitialized matchIndex[] and nextIndex[]
 			for i := 0; i < len(rf.peers); i++ {
-				rf.nextIndex[i] = rf.getLastLogIndex() + 1
+				rf.nextIndex[i] = rf.getLastLogIndex() + 1 // 122
 				rf.matchIndex[i] = 0
 			}
 			// immediately trigger a heartbeat
 			rf.heartbeatTimeoutTicker.Reset(time.Duration(rf.heartbeatTimeout) * time.Millisecond)
 			go rf.sendAppendEntriesToAllPeers()
-			// 3A: immediately commit a no-op log after being a leader?
-			//go rf.Start("NOOP")
+			// 3A: immediately commit a no-op log after being a leader
+			if rf.commitNoop {
+				go rf.Start(nil)
+			}
 			break
 		case FOLLOWER:
 			rf.state = FOLLOWER
