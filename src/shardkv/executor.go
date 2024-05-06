@@ -6,39 +6,22 @@ import (
 	"strconv"
 )
 
-// getOpDoneChan returns an op-done-notification-chan for a given commandIdx
-func (kv *ShardKV) getOpDoneChan(commandIdx int) chan Op {
-	if _, hasKey := kv.opDoneChans[commandIdx]; !hasKey {
-		kv.opDoneChans[commandIdx] = make(chan Op, 8) //! Note: must be unbuffered to avoid deadlock
-	}
-	return kv.opDoneChans[commandIdx]
-}
-
-func (kv *ShardKV) isKeyNotReady(key string) bool {
-	shardId := key2shard(key)
-	newShard := kv.currCfg.Shards[shardId] == kv.gid && kv.prevCfg.Shards[shardId] != kv.gid
-	outdated := kv.inMemoryDB[shardId].Version < kv.currCfg.Num
-	return newShard && outdated
-}
-
 // applier keeps receiving applied logs sent from raft, and handle them one by one.
 func (kv *ShardKV) applier() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
-			if msg.Command != nil && msg.CommandValid {
+			if msg.CommandValid && msg.Command != nil {
 				op := msg.Command.(Op)
 				kv.mu.Lock()
 
 				// check lastApplied index
 				if msg.CommandIndex <= kv.lastApplied {
-					DebugLog(dApply, kv, "op=%v, msg.CommandIndex <= kv.lastApplied; continue", op.OpType)
 					kv.mu.Unlock()
 					continue
 				}
 				kv.lastApplied = msg.CommandIndex
 
-				// TODO: refactor
 				// check if op is repeated/outdated
 				if op.OpType != GET && op.OpType != INSTALLSHARD { // GET and INSTALLSHARD (only update new shards) are idempotent
 					if op.SerialNum <= kv.clientId2SerialNum[op.ClientId] {
@@ -48,43 +31,23 @@ func (kv *ShardKV) applier() {
 					}
 				}
 
-				if op.OpType == UPDATECONFIG {
-					// update curr and prev config
-					op.Error = kv.doUpdateConfig(op.NewConfig) // TODO: refactor to pass op pointer
-				} else if op.OpType == INSTALLSHARD {
-					// put migrated shards into currDB
-					op.Error, op.InstalledSuccessShards = kv.doInstallShard(op.ShardData, op.ShardIDs, op.ShardDataVersion, op.Client2SerialNum)
-				} else if op.OpType == DELETESHARD {
-					op.Error = kv.doDeleteShard(op.ShardIDs, op.Version)
-				} else {
-					// check if this server is responsible for this key; if yes, whether shard is ready
-					responsible := kv.isCfgResponsibleForKey(kv.currCfg, op.Key)
-					if responsible {
-						shardNotReady := kv.isKeyNotReady(op.Key)
-						if shardNotReady {
-							op.Error = ErrShardNotReady
-							DebugLog(dApply, kv, "op= %v key=%v (shard=%v); not ready; DB=%v, currFbg=%v",
-								op.OpType, op.Key, key2shard(op.Key), db2str(kv.inMemoryDB), kv.currCfg.String())
-						} else {
-							if op.OpType == GET {
-								// get value from map
-								op.ResultForGet, op.Error = kv.doGet(&op)
-							} else if op.OpType == PUT {
-								// update k-v
-								op.Error = kv.doPut(op.Key, op.Value)
-							} else if op.OpType == APPEND {
-								// add string on the key's value
-								op.Error = kv.doAppend(op.Key, op.Value)
-							} else {
-								panic(fmt.Sprintf("unexpected op type:'%v'", op.OpType))
-							}
-						}
-					} else {
-						DebugLog(dApply, kv, "op= %v key=%v (shard=%v); not responsible", op.OpType, op.Key, key2shard(op.Key))
-						op.Error = ErrWrongGroup
-					}
-
+				switch op.OpType {
+				case UPDATECONFIG:
+					op.Error = kv.doUpdateConfig(&op)
+				case INSTALLSHARD:
+					op.Error, op.InstalledSuccessShards = kv.doInstallShard(&op)
+				case DELETESHARD:
+					op.Error = kv.doDeleteShard(&op)
+				case GET:
+					op.ResultForGet, op.Error = kv.doGet(&op)
+				case PUT:
+					op.Error = kv.doPut(&op)
+				case APPEND:
+					op.Error = kv.doAppend(&op)
+				default:
+					panic(fmt.Sprintf("unexpected op type: '%v'", op.OpType))
 				}
+
 				// TODO: refactor this
 				if op.OpType != GET && op.OpType != INSTALLSHARD {
 					if op.OpType == PUT || op.OpType == APPEND { // for put and append, only update serialNum after it is executed
@@ -98,16 +61,15 @@ func (kv *ShardKV) applier() {
 				}
 				// notify Get/PutAppend function that this operation is done, and send results by op
 				opDoneChan := kv.getOpDoneChan(msg.CommandIndex)
-				opDoneChan <- op //! potential deadlock!!!!!
+				opDoneChan <- op
 				// do snapshot
 				if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
-					snapshotBytes := kv.encodeSnapshot()
-					kv.rf.Snapshot(msg.CommandIndex, snapshotBytes)
+					kv.rf.Snapshot(msg.CommandIndex, kv.encodeSnapshot())
 					DebugLog(dSnap, kv, "do snapshot done, currCfg.Num=%v db=%v", kv.currCfg.Num, db2str(kv.inMemoryDB))
 				}
 				kv.mu.Unlock()
 			}
-			// a raft snapshot is installed on this machine
+
 			if msg.SnapshotValid {
 				kv.mu.Lock()
 				kv.decodeAndInstallSnapshot(msg.Snapshot, msg.SnapshotIndex)
@@ -117,39 +79,88 @@ func (kv *ShardKV) applier() {
 	}
 }
 
-// return the value of a key from the DB;
-// if key non-exist, return an error msf
-// ! should be in lock context (kv.mu)
-func (kv *ShardKV) doGet(op *Op) (string, Err) {
-	sid := key2shard(op.Key)
-	value, exist := kv.inMemoryDB[sid].Data[op.Key]
-	if !exist {
-		DebugLog(dGet, kv, "get %v, Err=%v; applied", op.Key, ErrNoKey)
-		return "", ErrNoKey
+// getOpDoneChan returns an op-done-notification-chan for a given commandIdx
+func (kv *ShardKV) getOpDoneChan(commandIdx int) chan Op {
+	if _, hasKey := kv.opDoneChans[commandIdx]; !hasKey {
+		kv.opDoneChans[commandIdx] = make(chan Op, 8)
+	}
+	return kv.opDoneChans[commandIdx]
+}
+
+func (kv *ShardKV) deleteKeyFromOpDoneChans(cmdIdx int) {
+	kv.mu.Lock()
+	delete(kv.opDoneChans, cmdIdx)
+	kv.mu.Unlock()
+}
+
+func (kv *ShardKV) isShardNotReady(key string) bool {
+	shardId := key2shard(key)
+	newShard := kv.currCfg.Shards[shardId] == kv.gid && kv.prevCfg.Shards[shardId] != kv.gid
+	outdated := kv.inMemoryDB[shardId].Version < kv.currCfg.Num
+	return newShard && outdated
+}
+
+func (kv *ShardKV) isKeyReady(op *Op) (bool, Err) {
+	responsible := kv.isCurrCfgResponsibleForKey(op.Key)
+	shardNotReady := kv.isShardNotReady(op.Key)
+	if !responsible {
+		DebugLog(dApply, kv, "op= %v key=%v (shard=%v); not responsible", op.OpType, op.Key, key2shard(op.Key))
+		return false, ErrWrongGroup
+	} else if shardNotReady {
+		DebugLog(dApply, kv, "op= %v key=%v (shard=%v); not ready; DB=%v, currFbg=%v", op.OpType, op.Key, key2shard(op.Key), db2str(kv.inMemoryDB), kv.currCfg.String())
+		return false, ErrShardNotReady
 	} else {
-		DebugLog(dGet, kv, "get %v = %v, Err=%v; db=%v, client=%v, serialNum=%v applied", op.Key, OK, kv.inMemoryDB, op.ClientId, op.SerialNum, value)
-		return value, OK
+		// the machine is responsible for the key's shard and the shard is ready
+		return true, OK
 	}
 }
 
-// ! should be in lock context (kv.mu)
-func (kv *ShardKV) doPut(key, value string) Err {
-	sid := key2shard(key)
-	kv.inMemoryDB[sid].Data[key] = value
-	DebugLog(dPut, kv, "put %v = %v applied", key, value)
-	return OK
+// return the value of a key from the DB;
+// if key non-exist, return an error msf
+func (kv *ShardKV) doGet(op *Op) (string, Err) {
+	keyReady, err := kv.isKeyReady(op)
+	if keyReady {
+		sid := key2shard(op.Key)
+		value, exist := kv.inMemoryDB[sid].Data[op.Key]
+		if !exist {
+			DebugLog(dGet, kv, "get %v, Err=%v; applied", op.Key, ErrNoKey)
+			return "", ErrNoKey
+		} else {
+			DebugLog(dGet, kv, "get %v = %v, Err=%v; db=%v, client=%v, serialNum=%v applied", op.Key, OK, kv.inMemoryDB, op.ClientId, op.SerialNum, value)
+			return value, OK
+		}
+	} else {
+		return "", err
+	}
 }
 
-// ! should be in lock context (kv.mu)
-func (kv *ShardKV) doAppend(key, value string) Err {
-	sid := key2shard(key)
-	kv.inMemoryDB[sid].Data[key] += value
-	DebugLog(dAppend, kv, "append %v -> += %v => %v applied", key, value, kv.inMemoryDB[sid].Data[key])
-	return OK
+func (kv *ShardKV) doPut(op *Op) Err {
+	keyReady, err := kv.isKeyReady(op)
+	if keyReady {
+		sid := key2shard(op.Key)
+		kv.inMemoryDB[sid].Data[op.Key] = op.Value
+		DebugLog(dPut, kv, "put %v = %v applied", op.Key, op.Value)
+		return OK
+	} else {
+		return err
+	}
+
 }
 
-func (kv *ShardKV) doUpdateConfig(serializedCfg string) Err {
-	newCfg := decodeConfig(serializedCfg)
+func (kv *ShardKV) doAppend(op *Op) Err {
+	keyReady, err := kv.isKeyReady(op)
+	if keyReady {
+		sid := key2shard(op.Key)
+		kv.inMemoryDB[sid].Data[op.Key] += op.Value
+		DebugLog(dAppend, kv, "append %v -> += %v => %v applied", op.Key, op.Value, kv.inMemoryDB[sid].Data[op.Key])
+		return OK
+	} else {
+		return err
+	}
+}
+
+func (kv *ShardKV) doUpdateConfig(op *Op) Err {
+	newCfg := decodeConfig(op.NewConfig)
 	if kv.currCfg.Num >= newCfg.Num {
 		DebugLog(dApply, kv, "no update cfg since currCfg.Num %v >= newCfg.Num %v", kv.currCfg.Num, newCfg.Num)
 		return ErrOutdatedConfig
@@ -176,7 +187,7 @@ func (kv *ShardKV) doUpdateConfig(serializedCfg string) Err {
 	if len(kv.prevCfg.Groups) == 0 {
 		for shardId := 0; shardId < shardctrler.NShards; shardId++ {
 			if kv.currCfg.Shards[shardId] == kv.gid {
-				kv.inMemoryDB[shardId].Version = kv.currCfg.Num
+				kv.inMemoryDB[shardId].Version = kv.currCfg.Num // mark all shards to be up-to-date
 				dbgMsg += fmt.Sprintf("S[%v].v=%v ", shardId, kv.inMemoryDB[shardId].Version)
 			}
 		}
@@ -200,14 +211,14 @@ func (kv *ShardKV) doUpdateConfig(serializedCfg string) Err {
 	return OK
 }
 
-// ! should be in lock context (kv.mu)
 // Install the shardData; it first checks if the data is outdated (smaller version)
 // if data is outdated, reject install and return OK; else install and update DB's shard data's version
-func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs string, version int, client2Seq string) (Err, string) {
-	shardDatas := decodeDB(serializedData)      // shardData
-	shardIDs := decodeSlice(serializedShardIDs) // shardIDs to be installed
-	successInstalledShardIDs := make([]int, 0)  // what shards are installed finally
-	clientId2SerialNum := decodeMap(client2Seq)
+func (kv *ShardKV) doInstallShard(op *Op) (Err, string) {
+	shardDatas := decodeDB(op.ShardData) // shardData
+	shardIDs := decodeSlice(op.ShardIDs) // shardIDs to be installed
+	version := op.ShardDataVersion
+	successInstalledShardIDs := make([]int, 0) // what shards are installed finally
+	clientId2SerialNum := decodeMap(op.Client2SerialNum)
 	// install the new shards, ignore the outdated ones.
 	for _, shardId := range shardIDs {
 		shardData := shardDatas[shardId]
@@ -217,22 +228,8 @@ func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs stri
 			kv.inMemoryDB[shardId].Version = version
 			kv.inMemoryDB[shardId].Data = shardData
 		}
-		// reject install a smaller-version shard data
 	}
-	/*
-		To prevent the same put/append request to be applied twice
-		For example, client send Append(Key="1", val="2") to 101, suppose ErrTimeout happens and the PutAppend RPC returns.
-		Suppose later this Append applied (now in the DB, key"1"="2"). After PutAppend RPC returns, the client send Append again.
-		Suppose now reconfig happens, group 102 is responsible for this key.
-		Next, the client request for 101 group for Append(Key="1", val="2") but get rejected by ErrWrongGroup.
-		Then client queries the latest config and retires, which sends  Append(Key="1", val="2") to 102.  (Suppose group 101 has migrated the shard contains `key"1"="2"` to 102 before this request.)
-		In the PutAppend RPC on group 102, suppose the SerialNum check pass, and finally Append(Key="1", val="2") is applied on 102.
-		At this time key"1"="22" in DB.
-
-		So in this case, Append(Key="1", val="2") is applied twice, which is buggy in the same client Append request.
-		Therefore, copying the clientId2SerialNum from 101 to 102 when shard migrate can solve it.
-	*/
-
+	// avoid the same Put/Append being executed twice because of shard migration
 	for clientId, seqId := range clientId2SerialNum {
 		if r, ok := kv.clientId2SerialNum[clientId]; !ok || r < seqId {
 			kv.clientId2SerialNum[clientId] = seqId
@@ -243,12 +240,13 @@ func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs stri
 	return OK, encodeSlice(successInstalledShardIDs)
 }
 
-func (kv *ShardKV) doDeleteShard(serializedShardIDs string, version int) Err {
-	if serializedShardIDs == "" {
+func (kv *ShardKV) doDeleteShard(op *Op) Err {
+	version := op.Version
+	if op.ShardIDs == "" {
 		DebugLog(dSend, kv, "warning, serializedShardIDs is empty")
 		return OK
 	}
-	shardIDs := decodeSlice(serializedShardIDs)
+	shardIDs := decodeSlice(op.ShardIDs)
 	successDeletedShardIDs := make([]int, 0)
 	for _, shardID := range shardIDs {
 		if version > kv.inMemoryDB[shardID].Version {
@@ -259,4 +257,10 @@ func (kv *ShardKV) doDeleteShard(serializedShardIDs string, version int) Err {
 	}
 	DebugLog(dSend, kv, "version=%v, deleted shards: %v, success: %v; DB=%v; applied", version, shardIDs, successDeletedShardIDs, db2str(kv.inMemoryDB))
 	return OK
+}
+
+func (kv *ShardKV) isCurrCfgResponsibleForKey(key string) bool {
+	sid := key2shard(key)
+	expectGID := kv.currCfg.Shards[sid]
+	return kv.gid == expectGID
 }

@@ -6,7 +6,7 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	OpType                 string // GET or PUT or APPEND or INSTALLSHARD or UPDATECONFIG
+	OpType                 string // GET or PUT or APPEND or INSTALLSHARD or UPDATECONFIG or DELETESHARD
 	Key                    string // for GET, PUT, APPEND
 	Value                  string // for GET
 	ResultForGet           string // for GET; the result for get
@@ -17,9 +17,9 @@ type Op struct {
 	Version                int    // for UPDATECONFIG; the version of the new shard data
 	AddedShards            string // for UPDATECONFIG; the shard ids to be added (gob+base64)
 	NewConfig              string // for UPDATECONFIG; the new config (gob+base64)
-	SerialNum              uint64 // client request's serial number
+	Client2SerialNum       string // for INSTALLSHARD
+	SerialNum              uint64
 	ClientId               int64
-	Client2SerialNum       string
 	Error                  Err
 }
 

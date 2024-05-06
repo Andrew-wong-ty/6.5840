@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"6.5840/shardctrler"
 	"fmt"
 	"log"
 	"os"
@@ -67,4 +68,12 @@ func DebugLog(topic logTopic, kv *ShardKV, format string, a ...interface{}) {
 		format = prefix + format
 		log.Printf(format, a...)
 	}
+}
+
+func db2str(db [shardctrler.NShards]Shard) string {
+	res := " "
+	for shardId, subDB := range db {
+		res += fmt.Sprintf("%vv%v_l%v; ", shardId, subDB.Version, len(subDB.Data))
+	}
+	return res
 }
