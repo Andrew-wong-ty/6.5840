@@ -26,7 +26,7 @@ func (kv *ShardKV) applier() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
-			if msg.CommandValid {
+			if msg.Command != nil && msg.CommandValid {
 				op := msg.Command.(Op)
 				kv.mu.Lock()
 
@@ -68,7 +68,7 @@ func (kv *ShardKV) applier() {
 						} else {
 							if op.OpType == GET {
 								// get value from map
-								op.ResultForGet, op.Error = kv.doGet(op.Key)
+								op.ResultForGet, op.Error = kv.doGet(&op)
 							} else if op.OpType == PUT {
 								// update k-v
 								op.Error = kv.doPut(op.Key, op.Value)
@@ -101,7 +101,9 @@ func (kv *ShardKV) applier() {
 				opDoneChan <- op //! potential deadlock!!!!!
 				// do snapshot
 				if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
-					go kv.rf.Snapshot(msg.CommandIndex, kv.encodeSnapshot())
+					snapshotBytes := kv.encodeSnapshot()
+					kv.rf.Snapshot(msg.CommandIndex, snapshotBytes)
+					DebugLog(dSnap, kv, "do snapshot done, currCfg.Num=%v db=%v", kv.currCfg.Num, db2str(kv.inMemoryDB))
 				}
 				kv.mu.Unlock()
 			}
@@ -118,14 +120,14 @@ func (kv *ShardKV) applier() {
 // return the value of a key from the DB;
 // if key non-exist, return an error msf
 // ! should be in lock context (kv.mu)
-func (kv *ShardKV) doGet(key string) (string, Err) {
-	sid := key2shard(key)
-	value, exist := kv.inMemoryDB[sid].Data[key]
+func (kv *ShardKV) doGet(op *Op) (string, Err) {
+	sid := key2shard(op.Key)
+	value, exist := kv.inMemoryDB[sid].Data[op.Key]
 	if !exist {
-		DebugLog(dGet, kv, "get %v, Err=%v; applied", key, ErrNoKey)
+		DebugLog(dGet, kv, "get %v, Err=%v; applied", op.Key, ErrNoKey)
 		return "", ErrNoKey
 	} else {
-		DebugLog(dGet, kv, "get %v = %v, Err=%v; applied", key, value, OK)
+		DebugLog(dGet, kv, "get %v = %v, Err=%v; db=%v, client=%v, serialNum=%v applied", op.Key, OK, kv.inMemoryDB, op.ClientId, op.SerialNum, value)
 		return value, OK
 	}
 }
@@ -242,6 +244,10 @@ func (kv *ShardKV) doInstallShard(serializedData string, serializedShardIDs stri
 }
 
 func (kv *ShardKV) doDeleteShard(serializedShardIDs string, version int) Err {
+	if serializedShardIDs == "" {
+		DebugLog(dSend, kv, "warning, serializedShardIDs is empty")
+		return OK
+	}
 	shardIDs := decodeSlice(serializedShardIDs)
 	successDeletedShardIDs := make([]int, 0)
 	for _, shardID := range shardIDs {

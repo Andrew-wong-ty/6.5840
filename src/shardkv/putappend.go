@@ -1,7 +1,6 @@
 package shardkv
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -55,8 +54,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			go kv.deleteKeyFromOpDoneChans(commandIdx)
 			reply.Err = msg.Error
 		} else {
-			fmt.Println("Wrong ID")
-			//DebugLog(dCheck, kv, "Wrong ID")
+			DebugLog(dCheck, kv, "Wrong ID")
 			reply.Err = ErrWrongLeader
 		}
 	case <-timer.C:

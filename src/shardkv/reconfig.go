@@ -58,7 +58,7 @@ func (kv *ShardKV) sendRemovedShards(gid2UnsentShards map[int][]int) {
 		go func() {
 			DebugLog(dMigrate, kv, "sending shardData, cfgUsed=%v, toGid=%v, shardIDs=%v, data=%v", currCfg.String(), args.ToGid, decodeSlice(args.ShardIDs), shardDB)
 			if ok, successInstalledShards := kv.sendInstallShardData(currCfg, &args); ok {
-				DebugLog(dMigrate, kv, "send shardData SUCCESS!, expectInstall=%v, actualInstall=%v; now start delete agreement", decodeSlice(args.ShardIDs), decodeSlice(successInstalledShards))
+				DebugLog(dMigrate, kv, "send shardData SUCCESS!, expectInstall=%v; now start delete agreement", decodeSlice(args.ShardIDs))
 				// start agreement to delete shards
 				kv.rf.Start(Op{
 					OpType:    DELETESHARD,
@@ -90,7 +90,7 @@ func (kv *ShardKV) pollConfig() {
 		kv.sendRemovedShards(gid2UnsentShards)
 	}
 	if unreceivedShards := kv.getUnreceivedShards(); len(unreceivedShards) != 0 {
-		DebugLog(dReceive, kv, "waiting shards %v", unreceivedShards)
+		DebugLog(dReceive, kv, "waiting shards %v, prevCfg=%v, currCfg=%v, ", unreceivedShards, kv.prevCfg.String(), kv.currCfg.String())
 		kv.mu.Unlock()
 		return
 	}

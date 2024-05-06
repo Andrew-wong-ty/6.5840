@@ -56,7 +56,7 @@ type ShardKV struct {
 func db2str(db [shardctrler.NShards]Shard) string {
 	res := " "
 	for shardId, subDB := range db {
-		res += fmt.Sprintf("%vv%vl%v; ", shardId, subDB.Version, len(subDB.Data))
+		res += fmt.Sprintf("%vv%v_l%v; ", shardId, subDB.Version, len(subDB.Data))
 	}
 	return res
 }
@@ -137,6 +137,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.ctrlers = ctrlers
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf.SetCommitNoop(true)
+	kv.rf.SetDbgMsg(fmt.Sprintf("%v", kv.gid))
 	// Your initialization code here.
 	kv.persister = persister
 	kv.dead = 0
@@ -175,6 +177,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	//go kv.dbgDetectMuDeadLock()
 	//go kv.dbgDetecCfgMutexDeadLock()
 	DebugLog(dCheck, kv, "server started!")
+
 	return kv
 }
 

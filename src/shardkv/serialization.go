@@ -85,7 +85,7 @@ func decodeSlice(encodedStr string) []int {
 	dec := gob.NewDecoder(buf)
 	err = dec.Decode(&data)
 	if err != nil {
-		panic("gob decode error")
+		panic(fmt.Sprintf("gob decode error, str=%v", encodedStr))
 	}
 	return data
 }

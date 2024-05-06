@@ -7,7 +7,7 @@ func (sc *ShardCtrler) applier() {
 	for !sc.killed() {
 		select {
 		case msg := <-sc.applyCh:
-			if msg.CommandValid {
+			if msg.Command != nil && msg.CommandValid {
 				op := msg.Command.(Op)
 				sc.mu.Lock()
 				// this op is outdated
