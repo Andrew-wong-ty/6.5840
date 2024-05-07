@@ -61,11 +61,12 @@ func (kv *ShardKV) sendRemovedShards(gid2UnsentShards map[int][]int) {
 				DebugLog(dMigrate, kv, "send shardData SUCCESS!, expectInstall=%v; now start delete agreement", decodeSlice(args.ShardIDs))
 				// start agreement to delete shards
 				kv.rf.Start(Op{
-					OpType:    DELETESHARD,
-					ShardIDs:  successInstalledShards, // shards to be deleted
-					SerialNum: uint64(currCfg.Num),
-					Version:   currCfg.Num,
-					ClientId:  kv.clientId + 1, // 1 to distinguish with UPDATECONFIG
+					OpType:     DELETESHARD,
+					Idempotent: true,
+					ShardIDs:   successInstalledShards, // shards to be deleted
+					SerialNum:  uint64(currCfg.Num),
+					Version:    currCfg.Num,
+					ClientId:   kv.clientId + 1, // 1 to distinguish with UPDATECONFIG
 				})
 			}
 		}()
@@ -102,10 +103,11 @@ func (kv *ShardKV) pollConfig() {
 		DebugLog(dReceive, kv, "new Cfg polled, nextCfg=%v, currCfg=%v; start agreement to update cfg", nextCfg.String(), currCfg.String())
 		// update config
 		kv.rf.Start(Op{
-			OpType:    UPDATECONFIG,
-			NewConfig: encodeConfig(nextCfg),
-			SerialNum: uint64(nextCfg.Num),
-			ClientId:  kv.clientId,
+			OpType:     UPDATECONFIG,
+			Idempotent: true,
+			NewConfig:  encodeConfig(nextCfg),
+			SerialNum:  uint64(nextCfg.Num),
+			ClientId:   kv.clientId,
 		})
 	}
 }

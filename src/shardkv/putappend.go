@@ -36,11 +36,12 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	// start agreement
 	op := Op{
-		Key:       args.Key,
-		Value:     args.Value,
-		OpType:    args.Op,
-		SerialNum: args.SerialNum,
-		ClientId:  args.ClientID,
+		Key:        args.Key,
+		Value:      args.Value,
+		OpType:     args.Op,
+		Idempotent: false,
+		SerialNum:  args.SerialNum,
+		ClientId:   args.ClientID,
 	}
 	commandIdx, _, _ := kv.rf.Start(op)
 	opDoneChan := kv.getOpDoneChan(commandIdx)

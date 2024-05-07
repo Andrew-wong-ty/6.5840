@@ -7,6 +7,7 @@ type Op struct {
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
 	OpType                 string // GET or PUT or APPEND or INSTALLSHARD or UPDATECONFIG or DELETESHARD
+	Idempotent             bool   // PUT and APPEND are not idempotent
 	Key                    string // for GET, PUT, APPEND
 	Value                  string // for GET
 	ResultForGet           string // for GET; the result for get

@@ -65,6 +65,7 @@ func (kv *ShardKV) InstallShardData(args *InstallShardArgs, reply *InstallShardR
 	kv.mu.Lock()
 	op := Op{
 		OpType:           INSTALLSHARD,
+		Idempotent:       true,
 		ShardData:        args.Data,
 		ShardIDs:         args.ShardIDs,
 		ShardDataVersion: args.CfgNum,

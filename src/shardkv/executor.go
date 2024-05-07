@@ -23,12 +23,10 @@ func (kv *ShardKV) applier() {
 				kv.lastApplied = msg.CommandIndex
 
 				// check if op is repeated/outdated
-				if op.OpType != GET && op.OpType != INSTALLSHARD { // GET and INSTALLSHARD (only update new shards) are idempotent
-					if op.SerialNum <= kv.clientId2SerialNum[op.ClientId] {
-						DebugLog(dApply, kv, "op=%v, op.SerialNum <= kv.clientId2SerialNum[op.ClientId]; continue", op.OpType)
-						kv.mu.Unlock()
-						continue
-					}
+				if !op.Idempotent && op.SerialNum <= kv.clientId2SerialNum[op.ClientId] {
+					DebugLog(dApply, kv, "op=%v, op.SerialNum <= kv.clientId2SerialNum[op.ClientId]; continue", op.OpType)
+					kv.mu.Unlock()
+					continue
 				}
 
 				switch op.OpType {
@@ -48,17 +46,11 @@ func (kv *ShardKV) applier() {
 					panic(fmt.Sprintf("unexpected op type: '%v'", op.OpType))
 				}
 
-				// TODO: refactor this
-				if op.OpType != GET && op.OpType != INSTALLSHARD {
-					if op.OpType == PUT || op.OpType == APPEND { // for put and append, only update serialNum after it is executed
-						if op.Error == OK {
-							kv.clientId2SerialNum[op.ClientId] = op.SerialNum
-						}
-					} else {
-						// INSTALLSHARD /  internal=>  UPDATECONFIG  DELETESHARD
-						kv.clientId2SerialNum[op.ClientId] = op.SerialNum
-					}
+				if !op.Idempotent && op.Error == OK {
+					// only update serialNum after it is executed successfully
+					kv.clientId2SerialNum[op.ClientId] = op.SerialNum
 				}
+
 				// notify Get/PutAppend function that this operation is done, and send results by op
 				opDoneChan := kv.getOpDoneChan(msg.CommandIndex)
 				opDoneChan <- op

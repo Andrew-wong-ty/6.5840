@@ -36,10 +36,11 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	//}
 	// start agreement
 	op := Op{
-		Key:       args.Key,
-		OpType:    GET,
-		SerialNum: args.SerialNum,
-		ClientId:  args.ClientID,
+		Key:        args.Key,
+		OpType:     GET,
+		Idempotent: true,
+		SerialNum:  args.SerialNum,
+		ClientId:   args.ClientID,
 	}
 	commandIdx, _, _ := kv.rf.Start(op)
 	opDoneChan := kv.getOpDoneChan(commandIdx)
