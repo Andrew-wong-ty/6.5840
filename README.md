@@ -37,6 +37,6 @@ So the group gets stuck in waiting for `log_to_install_shard` to be committed an
 
 ---
 ### Server miss configuration changes
-- **Solution**: do not poll the next config from shardctrler until all shards the server needs are migrated.
+- **Solution**: do not poll the next config from shardctrler until all shards the server needs are received.
 
 
